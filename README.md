@@ -15,14 +15,14 @@ A client-side tool for generating, organizing, and managing mailto hyperlinks.
 1. Download the source files.  
 2. Ensure the following directory structure:  
    /  
-   ├── index.html
-   ├── css/ 
-      ├── style.css  
+   ├── index.html  
+   ├── css/  
+   │   └── style.css  
    └── js/  
        ├── mailto.js  
        └── msgreader.js
 
-4. Open index.html in a modern web browser.
+3. Open index.html in a modern web browser.
 
 ## **Usage**
 
@@ -48,4 +48,4 @@ A client-side tool for generating, organizing, and managing mailto hyperlinks.
 
 * **Persistence**: Uses browser localStorage.  
 * **Encoding**: Handles standard URL encoding for special characters.  
-* **Dependencies**: No external libraries required.
+* **Server Requirement**: This application uses ES6 Modules (\<script type="module"\>) for the file parser. **You must serve it via a local server** (e.g., VS Code Live Server, Python http.server) rather than opening index.html directly from the file system, or the file import feature will be blocked by browser security policies (CORS).
