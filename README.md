@@ -15,13 +15,14 @@ A client-side tool for generating, organizing, and managing mailto hyperlinks.
 1. Download the source files.  
 2. Ensure the following directory structure:  
    /  
-   ├── index.html  
-   ├── style.css  
+   ├── index.html
+   ├── css/ 
+      ├── style.css  
    └── js/  
        ├── mailto.js  
        └── msgreader.js
 
-3. Open index.html in a modern web browser.
+4. Open index.html in a modern web browser.
 
 ## **Usage**
 
