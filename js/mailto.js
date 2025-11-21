@@ -678,9 +678,19 @@ const App = {
     },
 
     saveTemplate: () => {
-        if (!App.elements.resultMailto.value) {
-            App.generateLink();
-        }
+        // Always regenerate the link from current inputs to ensure freshness
+        const data = {
+            to: App.elements.resultTo.value,
+            cc: App.elements.resultCc.value,
+            bcc: App.elements.resultBcc.value,
+            subject: App.elements.resultSubject.value,
+            body: App.elements.resultBody.value
+        };
+        const mailto = MailTo.build(data);
+
+        // Update UI to match (keeps visual state consistent)
+        App.elements.resultMailto.value = mailto;
+        App.elements.resultLink.href = mailto;
 
         const name = App.elements.saveTemplateName.value.trim() || 
                      App.elements.resultSubject.value.trim() || 
@@ -697,7 +707,7 @@ const App = {
             id: Utils.generateId(),
             type: 'template',
             name: name,
-            mailto: App.elements.resultMailto.value
+            mailto: mailto
         });
 
         State.save();
