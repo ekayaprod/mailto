@@ -1,31 +1,30 @@
 /**
- * MailTo Link Generator - Standalone
- * Version: 3.0.0
- * 
- * A self-contained mailto link generator with template library management.
- * Supports .msg, .eml, and .oft file imports, folder organization, and CSV import/export.
+ * Application Controller
+ * Manages DOM interactions, local storage persistence, file processing,
+ * and hierarchical data structures for the MailTo Generator.
  */
 
 'use strict';
 
 /* =============================================================================
-   CONFIGURATION
+   CONSTANTS & CONFIG
    ============================================================================= */
 
 const CONFIG = {
-    STORAGE_KEY: 'mailto_generator_v3',
-    VERSION: '3.0.0',
+    STORAGE_KEY: 'mailto_generator_data',
     CSV_HEADERS: ['name', 'path', 'to', 'cc', 'bcc', 'subject', 'body'],
     MAILTO_PARAMS: ['cc', 'bcc', 'subject']
 };
 
 /* =============================================================================
-   UTILITY FUNCTIONS
+   UTILS
    ============================================================================= */
 
 const Utils = {
     /**
-     * Escapes HTML special characters to prevent XSS
+     * Sanitizes string input for HTML rendering.
+     * @param {string} str - Raw input string.
+     * @returns {string} HTML-safe string.
      */
     escapeHTML: (str) => {
         const div = document.createElement('div');
@@ -34,7 +33,8 @@ const Utils = {
     },
 
     /**
-     * Generates a unique ID using crypto.randomUUID or fallback
+     * Generates a pseudo-random identifier.
+     * @returns {string} UUID or timestamp-based string.
      */
     generateId: () => {
         if (crypto?.randomUUID) return crypto.randomUUID();
@@ -42,7 +42,10 @@ const Utils = {
     },
 
     /**
-     * Debounces a function call
+     * Delays execution of a function until after a wait period.
+     * @param {Function} func - Target function.
+     * @param {number} delay - Wait time in ms.
+     * @returns {Function} Debounced function.
      */
     debounce: (func, delay) => {
         let timeout;
@@ -53,20 +56,25 @@ const Utils = {
     },
 
     /**
-     * Copies text to clipboard
+     * writes text to the system clipboard.
+     * @param {string} text - Text to copy.
+     * @returns {Promise<boolean>} Success status.
      */
     copyToClipboard: async (text) => {
         try {
             await navigator.clipboard.writeText(text);
             return true;
         } catch (err) {
-            console.error('Failed to copy:', err);
+            console.error('Clipboard write failed:', err);
             return false;
         }
     },
 
     /**
-     * Triggers a file download
+     * Triggers a browser download for the provided content.
+     * @param {string} content - File content.
+     * @param {string} filename - Output filename.
+     * @param {string} mimeType - MIME type (e.g., 'text/csv').
      */
     downloadFile: (content, filename, mimeType) => {
         const blob = new Blob([content], { type: mimeType });
@@ -81,7 +89,9 @@ const Utils = {
     },
 
     /**
-     * Opens file picker dialog
+     * Opens the system file picker dialog.
+     * @param {Function} callback - Handler for the selected file.
+     * @param {string} accept - File type filter.
      */
     openFilePicker: (callback, accept = '*') => {
         const input = document.createElement('input');
@@ -94,19 +104,23 @@ const Utils = {
     },
 
     /**
-     * Reads a file as text
+     * wrapper for FileReader API.
+     * @param {File} file - File object to read.
+     * @returns {Promise<string>} File content.
      */
     readTextFile: (file) => {
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = (e) => resolve(e.target.result);
-            reader.onerror = () => reject(new Error('Failed to read file'));
+            reader.onerror = () => reject(new Error('FileReader error'));
             reader.readAsText(file);
         });
     },
 
     /**
-     * Parses CSV line handling quoted values
+     * Parses a single CSV line, handling quoted fields and commas.
+     * @param {string} line - Raw CSV line.
+     * @returns {string[]} Array of field values.
      */
     parseCSVLine: (line) => {
         const values = [];
@@ -139,7 +153,10 @@ const Utils = {
     },
 
     /**
-     * Converts data to CSV format
+     * Serializes an array of objects to a CSV string.
+     * @param {Object[]} data - Data array.
+     * @param {string[]} headers - Column headers.
+     * @returns {string} CSV string.
      */
     toCSV: (data, headers) => {
         const escapeCell = (cell) => {
@@ -157,7 +174,10 @@ const Utils = {
     },
 
     /**
-     * Parses CSV file content
+     * Parses CSV content into an object array.
+     * @param {string} text - Raw CSV content.
+     * @param {string[]} requiredHeaders - List of mandatory headers for validation.
+     * @returns {Object} Result containing 'data' array and 'errors' array.
      */
     parseCSV: (text, requiredHeaders) => {
         const lines = text.split('\n').filter(l => l.trim());
@@ -166,16 +186,14 @@ const Utils = {
         const headers = Utils.parseCSVLine(lines[0]).map(h => h.trim());
         const errors = [];
 
-        // Validate headers
         for (const reqHeader of requiredHeaders) {
             if (!headers.includes(reqHeader)) {
-                errors.push(`Missing required header: "${reqHeader}"`);
+                errors.push(`Missing header: "${reqHeader}"`);
             }
         }
         if (errors.length > 0) return { data: [], errors };
 
-        // Parse rows
-        const data = lines.slice(1).map((line, idx) => {
+        const data = lines.slice(1).map((line) => {
             const values = Utils.parseCSVLine(line);
             const obj = {};
             headers.forEach((header, i) => {
@@ -191,12 +209,15 @@ const Utils = {
 };
 
 /* =============================================================================
-   UI COMPONENTS
+   UI MODULE
    ============================================================================= */
 
 const UI = {
     /**
-     * Shows a modal dialog
+     * Injects a modal into the DOM.
+     * @param {string} title - Modal header.
+     * @param {string} content - HTML content for body.
+     * @param {Object[]} buttons - Array of button configs { label, class, callback }.
      */
     showModal: (title, content, buttons = []) => {
         const overlay = document.getElementById('modal-overlay');
@@ -224,15 +245,12 @@ const UI = {
         overlay.classList.add('show');
     },
 
-    /**
-     * Hides the modal dialog
-     */
     hideModal: () => {
         document.getElementById('modal-overlay').classList.remove('show');
     },
 
     /**
-     * Shows a toast notification
+     * Displays a transient toast notification.
      */
     showToast: (() => {
         let timeout;
@@ -246,7 +264,11 @@ const UI = {
     })(),
 
     /**
-     * Renders the file tree list
+     * Generic list renderer.
+     * @param {HTMLElement} container - DOM target.
+     * @param {Array} items - Data items.
+     * @param {string} emptyMessage - Text to show if items is empty.
+     * @param {Function} createItemFn - Factory function returning an HTMLElement.
      */
     renderList: (container, items, emptyMessage, createItemFn) => {
         container.innerHTML = '';
@@ -266,7 +288,7 @@ const UI = {
 };
 
 /* =============================================================================
-   SVG ICONS
+   ASSETS
    ============================================================================= */
 
 const Icons = {
@@ -286,44 +308,40 @@ const State = {
     currentFolderId: 'root',
 
     /**
-     * Loads state from localStorage
+     * Loads application state from localStorage.
+     * Handles legacy array format if present.
      */
     load: () => {
         try {
             const stored = localStorage.getItem(CONFIG.STORAGE_KEY);
             if (!stored) {
-                State.data = { library: [], version: CONFIG.VERSION };
+                State.data = { library: [] };
                 return;
             }
 
             const parsed = JSON.parse(stored);
-            // Handle legacy array format
             if (Array.isArray(parsed)) {
-                State.data = { library: parsed, version: CONFIG.VERSION };
+                State.data = { library: parsed };
             } else {
                 State.data = parsed;
             }
         } catch (err) {
-            console.error('Failed to load state:', err);
-            State.data = { library: [], version: CONFIG.VERSION };
+            console.error('State load failed:', err);
+            State.data = { library: [] };
         }
     },
 
-    /**
-     * Saves state to localStorage
-     */
     save: () => {
         try {
-            State.data.version = CONFIG.VERSION;
             localStorage.setItem(CONFIG.STORAGE_KEY, JSON.stringify(State.data));
         } catch (err) {
-            console.error('Failed to save state:', err);
-            UI.showToast('Failed to save changes');
+            console.error('State save failed:', err);
+            UI.showToast('Failed to save data');
         }
     },
 
     /**
-     * Recursively finds an item in the tree
+     * Recursive search for a library item or folder by ID.
      */
     findItem: (id, items = State.data.library, parent = null) => {
         if (id === 'root') {
@@ -341,7 +359,7 @@ const State = {
     },
 
     /**
-     * Gets all folders for dropdown population
+     * Flattens the directory structure to a list of folders.
      */
     getAllFolders: (items = State.data.library, level = 0) => {
         let folders = [];
@@ -359,7 +377,7 @@ const State = {
     },
 
     /**
-     * Gets breadcrumb path for current folder
+     * Generates the navigation path to the current folder.
      */
     getBreadcrumb: (folderId) => {
         if (folderId === 'root') return [{ id: 'root', name: 'Root' }];
@@ -391,7 +409,7 @@ const State = {
     },
 
     /**
-     * Flattens tree into array with path for CSV export
+     * Recursively collects all templates for CSV export.
      */
     flattenLibrary: (items = State.data.library, parentPath = '') => {
         let flattened = [];
@@ -421,7 +439,7 @@ const State = {
     },
 
     /**
-     * Imports CSV data into library structure
+     * Reconstructs directory structure from flat CSV records.
      */
     importFromCSV: (records) => {
         const folderMap = new Map([['/', State.data.library]]);
@@ -430,7 +448,6 @@ const State = {
             let path = (record.path || '/').trim();
             if (!path.startsWith('/')) path = '/' + path;
 
-            // Ensure folder path exists
             if (!folderMap.has(path)) {
                 const parts = path.split('/').filter(p => p);
                 let currentPath = '/';
@@ -458,7 +475,6 @@ const State = {
                 });
             }
 
-            // Add template
             const targetArray = folderMap.get(path);
             const mailto = MailTo.build({
                 to: record.to,
@@ -479,13 +495,10 @@ const State = {
 };
 
 /* =============================================================================
-   MAILTO OPERATIONS
+   MAILTO PROTOCOL
    ============================================================================= */
 
 const MailTo = {
-    /**
-     * Parses a mailto link into components
-     */
     parse: (str) => {
         const data = { to: '', cc: '', bcc: '', subject: '', body: '' };
         if (!str || !str.startsWith('mailto:')) return data;
@@ -504,15 +517,12 @@ const MailTo = {
                 if (params.has(key)) data[key] = params.get(key);
             });
         } catch (err) {
-            console.error('Failed to parse mailto:', err);
+            console.error('Parse error:', err);
         }
 
         return data;
     },
 
-    /**
-     * Builds a mailto link from components
-     */
     build: (data) => {
         try {
             const params = [];
@@ -524,24 +534,20 @@ const MailTo = {
             }
             return `mailto:${encodeURIComponent(data.to || '')}?${params.join('&')}`;
         } catch (err) {
-            console.error('Failed to build mailto:', err);
+            console.error('Build error:', err);
             return '';
         }
     }
 };
 
 /* =============================================================================
-   APPLICATION LOGIC
+   CONTROLLER
    ============================================================================= */
 
 const App = {
     elements: {},
 
-    /**
-     * Initializes the application
-     */
     init: async () => {
-        // Cache DOM elements
         App.elements = {
             treeContainer: document.getElementById('tree-list-container'),
             breadcrumb: document.getElementById('breadcrumb-container'),
@@ -566,13 +572,12 @@ const App = {
             btnExportCSV: document.getElementById('btn-export-csv')
         };
 
-        // Load MsgReader module
         try {
             const module = await import('./msgreader.js');
             window.MsgReader = module.MsgReader;
         } catch (err) {
-            console.error('Failed to load msgreader.js:', err);
-            UI.showToast('Warning: Email file import unavailable');
+            console.error('MsgReader module unavailable:', err);
+            UI.showToast('Email file import disabled');
         }
 
         State.load();
@@ -581,11 +586,7 @@ const App = {
         App.refreshFolderDropdown();
     },
 
-    /**
-     * Attaches all event listeners
-     */
     attachEventListeners: () => {
-        // Upload zone
         App.elements.uploadWrapper.addEventListener('click', () => {
             App.elements.fileInput.click();
         });
@@ -594,7 +595,6 @@ const App = {
             if (e.target.files[0]) App.handleFileUpload(e.target.files[0]);
         });
 
-        // Drag and drop
         ['dragenter', 'dragover'].forEach(evt => {
             App.elements.uploadWrapper.addEventListener(evt, (e) => {
                 e.preventDefault();
@@ -608,7 +608,6 @@ const App = {
             if (e.dataTransfer.files[0]) App.handleFileUpload(e.dataTransfer.files[0]);
         });
 
-        // Buttons
         App.elements.btnNewFolder.addEventListener('click', App.createFolder);
         App.elements.btnGenerate.addEventListener('click', App.generateLink);
         App.elements.btnSave.addEventListener('click', App.saveTemplate);
@@ -617,22 +616,17 @@ const App = {
         App.elements.btnImportCSV.addEventListener('click', App.importCSV);
         App.elements.btnExportCSV.addEventListener('click', App.exportCSV);
 
-        // Tree navigation
         App.elements.treeContainer.addEventListener('click', App.handleTreeClick);
         App.elements.breadcrumb.addEventListener('click', App.handleBreadcrumbClick);
 
-        // Close modal on overlay click
         document.getElementById('modal-overlay').addEventListener('click', (e) => {
             if (e.target.id === 'modal-overlay') UI.hideModal();
         });
     },
 
-    /**
-     * Handles uploaded email file
-     */
     handleFileUpload: (file) => {
         if (!window.MsgReader) {
-            UI.showToast('Email parser not available');
+            UI.showToast('Parser module not loaded');
             return;
         }
 
@@ -654,20 +648,15 @@ const App = {
                 App.elements.resultCc.value = recipientMap[2].join(', ');
                 App.elements.resultBcc.value = recipientMap[3].join(', ');
 
-                UI.showToast('File loaded successfully');
+                UI.showToast('File imported');
             } catch (err) {
-                console.error('File parsing error:', err);
-                UI.showModal('Import Error', `<p>Failed to parse file: ${Utils.escapeHTML(err.message)}</p>`, [
-                    { label: 'OK' }
-                ]);
+                console.error('Import error:', err);
+                UI.showModal('Import Error', `<p>${Utils.escapeHTML(err.message)}</p>`, [{ label: 'OK' }]);
             }
         };
         reader.readAsArrayBuffer(file);
     },
 
-    /**
-     * Generates mailto link
-     */
     generateLink: () => {
         const data = {
             to: App.elements.resultTo.value,
@@ -689,9 +678,6 @@ const App = {
         App.refreshFolderDropdown();
     },
 
-    /**
-     * Saves template to library
-     */
     saveTemplate: () => {
         if (!App.elements.resultMailto.value) {
             App.generateLink();
@@ -717,17 +703,14 @@ const App = {
 
         State.save();
         App.renderLibrary();
-        UI.showToast('Template saved');
+        UI.showToast('Saved to library');
     },
 
-    /**
-     * Creates a new folder
-     */
     createFolder: () => {
         UI.showModal('New Folder', `
             <div class="form-group">
                 <label for="folder-name">Folder Name</label>
-                <input type="text" id="folder-name" class="form-input" placeholder="Enter folder name">
+                <input type="text" id="folder-name" class="form-input" placeholder="Name">
             </div>
         `, [
             { label: 'Cancel' },
@@ -736,13 +719,14 @@ const App = {
                 const name = input.value.trim();
                 
                 if (!name) {
-                    UI.showToast('Folder name required');
+                    UI.showToast('Name required');
                     return false;
                 }
 
                 const result = State.findItem(State.currentFolderId);
                 const folder = result?.item || result || { children: State.data.library };
 
+                if (!folder.children) folder.children = [];
                 folder.children.push({
                     id: Utils.generateId(),
                     type: 'folder',
@@ -757,7 +741,225 @@ const App = {
         ]);
     },
 
-    /**
-     * Clears the form
-     */
-    clearForm: () =>
+    clearForm: () => {
+        [
+            'resultTo', 'resultCc', 'resultBcc', 'resultSubject', 
+            'resultBody', 'resultMailto', 'saveTemplateName'
+        ].forEach(k => {
+            if(App.elements[k]) App.elements[k].value = '';
+        });
+        
+        if (App.elements.fileInput) App.elements.fileInput.value = '';
+        App.elements.outputWrapper.classList.add('hidden');
+        UI.showToast('Form reset');
+    },
+
+    copyLink: () => {
+        const link = App.elements.resultMailto.value;
+        if (link) {
+            Utils.copyToClipboard(link).then(success => {
+                UI.showToast(success ? 'Copied' : 'Copy failed');
+            });
+        }
+    },
+
+    exportCSV: () => {
+        const data = State.flattenLibrary();
+        if (data.length === 0) {
+            UI.showToast('Library is empty');
+            return;
+        }
+
+        const csvContent = Utils.toCSV(data, CONFIG.CSV_HEADERS);
+        const filename = `mailto-export-${new Date().toISOString().slice(0,10)}.csv`;
+        Utils.downloadFile(csvContent, filename, 'text/csv');
+    },
+
+    importCSV: () => {
+        Utils.openFilePicker((file) => {
+            Utils.readTextFile(file).then(text => {
+                const { data, errors } = Utils.parseCSV(text, CONFIG.CSV_HEADERS);
+                
+                if (errors.length > 0) {
+                    UI.showModal('Import Errors', `
+                        <ul style="color: var(--danger); padding-left: 1rem;">
+                            ${errors.map(e => `<li>${Utils.escapeHTML(e)}</li>`).join('')}
+                        </ul>
+                    `, [{ label: 'OK' }]);
+                    return;
+                }
+
+                if (data.length === 0) {
+                    UI.showToast('No data found');
+                    return;
+                }
+
+                State.importFromCSV(data);
+                State.save();
+                App.renderLibrary();
+                App.refreshFolderDropdown();
+                UI.showToast(`Imported ${data.length} items`);
+            }).catch(err => {
+                console.error('CSV read error:', err);
+                UI.showToast('Read failed');
+            });
+        }, '.csv');
+    },
+
+    renderLibrary: () => {
+        const path = State.getBreadcrumb(State.currentFolderId);
+        App.elements.breadcrumb.innerHTML = path.map((p, i) => 
+            i === path.length - 1 
+            ? `<span class="breadcrumb-current">${Utils.escapeHTML(p.name)}</span>`
+            : `<a href="#" class="breadcrumb-link" data-id="${p.id}">${Utils.escapeHTML(p.name)}</a><span class="breadcrumb-sep">/</span>`
+        ).join('');
+
+        const result = State.findItem(State.currentFolderId);
+        const items = result?.item?.children || result?.children || State.data.library;
+
+        const sortedItems = [...items].sort((a, b) => {
+            if (a.type === b.type) return a.name.localeCompare(b.name);
+            return a.type === 'folder' ? -1 : 1;
+        });
+
+        UI.renderList(App.elements.treeContainer, sortedItems, 'Empty folder', (item) => {
+            const div = document.createElement('div');
+            div.className = 'list-item';
+            div.dataset.id = item.id;
+            div.dataset.type = item.type;
+            
+            const isFolder = item.type === 'folder';
+            
+            div.innerHTML = `
+                <div class="item-icon ${isFolder ? 'folder' : 'template'}">
+                    ${isFolder ? Icons.folder : Icons.template}
+                </div>
+                <div class="item-name" title="${Utils.escapeHTML(item.name)}">
+                    ${Utils.escapeHTML(item.name)}
+                </div>
+                <div class="item-actions">
+                    ${!isFolder ? `<button class="action-btn copy-btn" title="Copy Link">${Icons.folder}</button>` : ''}
+                    <button class="action-btn move-btn" title="Move">${Icons.move}</button>
+                    <button class="action-btn edit-btn" title="${isFolder ? 'Rename' : 'Load'}">${Icons.edit}</button>
+                    <button class="action-btn delete-btn" title="Delete">${Icons.trash}</button>
+                </div>
+            `;
+            return div;
+        });
+    },
+
+    refreshFolderDropdown: () => {
+        const folders = State.getAllFolders();
+        App.elements.saveTargetFolder.innerHTML = folders.map(f => 
+            `<option value="${f.id}">${'&nbsp;'.repeat(f.level * 2)}${f.level > 0 ? '📂 ' : ''}${Utils.escapeHTML(f.name)}</option>`
+        ).join('');
+        
+        if (State.findItem(State.currentFolderId)) {
+            App.elements.saveTargetFolder.value = State.currentFolderId;
+        }
+    },
+
+    handleTreeClick: (e) => {
+        const itemEl = e.target.closest('.list-item');
+        if (!itemEl) return;
+
+        const id = itemEl.dataset.id;
+        const type = itemEl.dataset.type;
+        const result = State.findItem(id);
+        
+        if (!result) return;
+        const item = result.item;
+
+        if (type === 'folder' && (e.target.classList.contains('item-name') || e.target.classList.contains('item-icon'))) {
+            State.currentFolderId = id;
+            App.renderLibrary();
+            App.refreshFolderDropdown();
+            return;
+        }
+
+        if (e.target.closest('.delete-btn')) {
+            UI.showModal('Confirm Delete', `Delete "${Utils.escapeHTML(item.name)}"?`, [
+                { label: 'Cancel' },
+                { label: 'Delete', class: 'btn-danger', callback: () => {
+                    const parent = result.parent || { children: State.data.library };
+                    parent.children = parent.children.filter(c => c.id !== id);
+                    State.save();
+                    App.renderLibrary();
+                }}
+            ]);
+        } else if (e.target.closest('.edit-btn')) {
+            if (type === 'folder') {
+                UI.showModal('Rename Folder', `
+                    <div class="form-group">
+                        <input type="text" id="rename-input" class="form-input" value="${Utils.escapeHTML(item.name)}">
+                    </div>
+                `, [
+                    { label: 'Cancel' },
+                    { label: 'Save', class: 'btn-primary', callback: () => {
+                        const val = document.getElementById('rename-input').value.trim();
+                        if (val) {
+                            item.name = val;
+                            State.save();
+                            App.renderLibrary();
+                            App.refreshFolderDropdown();
+                        }
+                    }}
+                ]);
+            } else {
+                const parsed = MailTo.parse(item.mailto);
+                App.elements.resultTo.value = parsed.to || '';
+                App.elements.resultCc.value = parsed.cc || '';
+                App.elements.resultBcc.value = parsed.bcc || '';
+                App.elements.resultSubject.value = parsed.subject || '';
+                App.elements.resultBody.value = parsed.body || '';
+                App.elements.saveTemplateName.value = item.name;
+                UI.showToast('Template loaded');
+            }
+        } else if (e.target.closest('.move-btn')) {
+            const folders = State.getAllFolders();
+            UI.showModal('Move Item', `
+                <div class="form-group">
+                    <label>Destination:</label>
+                    <select id="move-select" class="form-input">
+                        ${folders.map(f => `<option value="${f.id}" ${f.id === State.currentFolderId ? 'selected' : ''}>${'&nbsp;'.repeat(f.level * 2)}${f.name}</option>`).join('')}
+                    </select>
+                </div>
+            `, [
+                { label: 'Cancel' },
+                { label: 'Move', class: 'btn-primary', callback: () => {
+                    const targetId = document.getElementById('move-select').value;
+                    if (targetId === id) return;
+                    
+                    const targetRes = State.findItem(targetId);
+                    const targetFolder = targetRes?.item || targetRes || { children: State.data.library };
+                    
+                    const oldParent = result.parent || { children: State.data.library };
+                    oldParent.children = oldParent.children.filter(c => c.id !== id);
+                    
+                    if (!targetFolder.children) targetFolder.children = [];
+                    targetFolder.children.push(item);
+                    
+                    State.save();
+                    App.renderLibrary();
+                }}
+            ]);
+        } else if (e.target.closest('.copy-btn')) {
+            Utils.copyToClipboard(item.mailto).then(() => UI.showToast('Copied'));
+        }
+    },
+
+    handleBreadcrumbClick: (e) => {
+        if (e.target.classList.contains('breadcrumb-link')) {
+            e.preventDefault();
+            State.currentFolderId = e.target.dataset.id;
+            App.renderLibrary();
+            App.refreshFolderDropdown();
+        }
+    }
+};
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', App.init);
+} else {
+    App.init();
+}
