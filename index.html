@@ -81,32 +81,19 @@
 
                 <!-- Action Buttons -->
                 <div class="button-group">
-                    <button id="btn-generate" class="btn-primary">Generate Link</button>
                     <button id="btn-save-to-library" class="btn-success">Save to Library</button>
+                    <a href="#" id="result-link" target="_blank" class="btn-primary btn-block" style="margin-top:0; text-align:center; padding-top:0.5rem; text-decoration:none;">Launch Email App</a>
                 </div>
 
-                <!-- Output Section (Hidden by default) -->
-                <div id="output-wrapper" class="output-section hidden">
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="save-template-name">Template Name</label>
-                            <input type="text" id="save-template-name" class="form-input" placeholder="New Template">
-                        </div>
-                        <div class="form-group">
-                            <label for="save-target-folder">Save To</label>
-                            <select id="save-target-folder" class="form-input"></select>
-                        </div>
-                    </div>
-
+                <!-- Live Preview Section (Always Visible) -->
+                <div id="output-wrapper" class="output-section">
                     <div class="form-group">
-                        <label for="result-mailto">MailTo Link</label>
+                        <label for="result-mailto">MailTo Link Preview</label>
                         <div class="input-with-button">
                             <input type="text" id="result-mailto" class="form-input" readonly>
                             <button id="copy-mailto-btn" class="btn-secondary">Copy</button>
                         </div>
                     </div>
-
-                    <a href="#" id="result-link" target="_blank" class="btn-primary btn-block">Launch Email App</a>
                 </div>
             </div>
         </main>
