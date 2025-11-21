@@ -1,742 +1,902 @@
 /**
- * OLE/MIME Email File Parser
- * * processes .msg (OLE Compound Document) and .eml (MIME) file formats.
- * Handles binary property extraction, text decoding, and recipient reconciliation.
+ * Application Controller
+ * Manages DOM interactions, local storage persistence, file processing,
+ * and hierarchical data structures.
  */
 
 'use strict';
 
-// MAPI Property Tags
-const PROP_TYPE_INTEGER32 = 0x0003;
-const PROP_TYPE_BOOLEAN = 0x000B;
-const PROP_TYPE_STRING = 0x001E;
-const PROP_TYPE_STRING8 = 0x001F;
-const PROP_TYPE_TIME = 0x0040;
-const PROP_TYPE_BINARY = 0x0102;
-
-const PROP_ID_SUBJECT = 0x0037;
-const PROP_ID_BODY = 0x1000;
-const PROP_ID_HTML_BODY = 0x1013;
-const PROP_ID_DISPLAY_TO = 0x0E04;
-const PROP_ID_DISPLAY_CC = 0x0E03;
-const PROP_ID_DISPLAY_BCC = 0x0E02;
-
-const PROP_ID_RECIPIENT_TYPE = 0x0C15;
-const PROP_ID_RECIPIENT_DISPLAY_NAME = 0x3001;
-const PROP_ID_RECIPIENT_EMAIL_ADDRESS = 0x3003;
-const PROP_ID_RECIPIENT_SMTP_ADDRESS = 0x39FE;
-
-const RECIPIENT_TYPE_TO = 1;
-const RECIPIENT_TYPE_CC = 2;
-const RECIPIENT_TYPE_BCC = 3;
-
-// Module-Level Decoders
-let _textDecoderUtf16 = null;
-let _textDecoderWin1252 = null;
-let _domParser = null;
-
-function getTextDecoder(encoding) {
-    if (encoding === 'utf-16le') {
-        if (!_textDecoderUtf16) _textDecoderUtf16 = new TextDecoder('utf-16le', { fatal: false });
-        return _textDecoderUtf16;
-    }
-    if (encoding === 'windows-1252') {
-        if (!_textDecoderWin1252) _textDecoderWin1252 = new TextDecoder('windows-1252', { fatal: false });
-        return _textDecoderWin1252;
-    }
-    return new TextDecoder(encoding, { fatal: false });
-}
-
-function getDOMParser() {
-    if (!_domParser && typeof DOMParser !== 'undefined') {
-        _domParser = new DOMParser();
-    }
-    return _domParser;
-}
-
 /* =============================================================================
-   TEXT PROCESSING UTILS
+   CONSTANTS & CONFIG
    ============================================================================= */
 
-/**
- * Decodes Quoted-Printable strings to raw text.
- */
-function _decodeQuotedPrintable(str, charset = 'utf-8') {
-    if (!str) return '';
-    
-    // Join soft lines and convert hex to chars
-    let decoded = str
-        .replace(/=(\r\n|\n)/g, '') 
-        .replace(/=([0-9A-F]{2})/g, (match, hex) => String.fromCharCode(parseInt(hex, 16)));
-    
-    try {
-        let bytes = new Uint8Array(decoded.length);
-        for (let i = 0; i < decoded.length; i++) bytes[i] = decoded.charCodeAt(i);
-        
-        let encoding = charset.toLowerCase();
-        if (encoding === 'us-ascii') encoding = 'utf-8';
-        
-        return new TextDecoder(encoding, { fatal: false }).decode(bytes);
-    } catch (e) { 
-        return decoded; 
-    }
-}
-
-/**
- * Removes HTML tags and CSS artifacts, normalizing to plain text.
- */
-function _stripHtml(html) {
-    if (!html || typeof html !== 'string') return ''; 
-    
-    // Aggressive Regex Removal for scripts/styles
-    let text = html
-        .replace(/<head[\s\S]*?<\/head>/gi, '')
-        .replace(/<style[\s\S]*?<\/style>/gi, '')
-        .replace(/<script[\s\S]*?<\/script>/gi, '')
-        .replace(/<!--[\s\S]*?-->/g, '')
-        .replace(/<\?xml[^>]*\?>/gi, '');
-
-    // Outlook-specific CSS artifact removal
-    text = text.replace(/[.#a-z0-9_]+\s*\{[^}]+\}/gi, '');
-
-    // Block tag spacing
-    text = text.replace(/\s*<(br|p|div|tr|li|h1|h2|h3|h4|h5|h6)[^>]*>\s*/gi, '\n');
-    
-    let parser = getDOMParser();
-    if (parser) {
-        try {
-            let doc = parser.parseFromString(text, 'text/html');
-            const junk = doc.querySelectorAll('style, script, link, meta, title');
-            junk.forEach(el => el.remove());
-            text = doc.body ? doc.body.textContent : (doc.documentElement.textContent || '');
-        } catch (e) {
-            text = text.replace(/<[^>]+>/g, '');
-        }
-    } else {
-        text = text.replace(/<[^>]+>/g, '');
-    }
-    
-    return _normalizeText(text);
-}
-
-/**
- * Normalizes line endings and collapses excessive whitespace.
- */
-function _normalizeText(text) {
-    if (!text) return '';
-    return text
-        .replace(/\r\n/g, '\n')
-        .replace(/\r/g, '\n')
-        .replace(/\n{3,}/g, '\n\n') 
-        .trim();
-}
-
-function dataViewToString(view, encoding) {
-    if (encoding === 'utf-8') {
-        try {
-            if (typeof TextDecoder === 'undefined') throw new Error("TextDecoder missing");
-            let decoded = new TextDecoder('utf-8', { fatal: true }).decode(view);
-            const nullIdx = decoded.indexOf('\0');
-            return nullIdx !== -1 ? decoded.substring(0, nullIdx) : decoded;
-        } catch (e) { 
-            return dataViewToString(view, 'ascii'); 
-        }
-    }
-    
-    if (encoding === 'utf16le') {
-        try {
-            if (typeof TextDecoder === 'undefined') throw new Error("TextDecoder missing");
-            let decoded = getTextDecoder('utf-16le').decode(view);
-            const nullIdx = decoded.indexOf('\0');
-            return nullIdx !== -1 ? decoded.substring(0, nullIdx) : decoded;
-        } catch (e) {
-            let result = '';
-            for (let i = 0; i < view.byteLength - 1; i += 2) {
-                let charCode = view.getUint16(i, true);
-                if (charCode === 0) break;
-                result += String.fromCharCode(charCode);
-            }
-            return result;
-        }
-    }
-    
-    try {
-        let decoded = getTextDecoder('windows-1252').decode(view);
-        const nullIdx = decoded.indexOf('\0');
-        return nullIdx !== -1 ? decoded.substring(0, nullIdx) : decoded;
-    } catch(e) {
-        let result = '';
-        for (let i = 0; i < view.byteLength; i++) {
-            let charCode = view.getUint8(i);
-            if (charCode === 0) break;
-            result += String.fromCharCode(charCode);
-        }
-        return result;
-    }
-}
-
-function filetimeToDate(low, high) {
-    if (typeof BigInt === 'undefined') return null;
-    try {
-        const FILETIME_EPOCH_DIFF = 116444736000000000n;
-        let filetime = (BigInt(high) << 32n) | BigInt(low);
-        return new Date(Number((filetime - FILETIME_EPOCH_DIFF) / 10000n));
-    } catch (e) { return null; }
-}
+const CONFIG = {
+    STORAGE_KEY: 'mailto_generator_data',
+    CSV_HEADERS: ['name', 'path', 'to', 'cc', 'bcc', 'subject', 'body'],
+    MAILTO_PARAMS: ['cc', 'bcc', 'subject']
+};
 
 /* =============================================================================
-   PARSER LOGIC
+   UTILS
    ============================================================================= */
 
-function _parsePropTag(entryName) {
-    let propTagStr = "00000000";
-    if (entryName.length >= 20) propTagStr = entryName.substring(entryName.length - 8);
-    else {
-        let parts = entryName.split('_');
-        if (parts.length >= 3) propTagStr = parts[2];
-        else return null;
-    }
-    try {
-        return { id: parseInt(propTagStr.substring(0, 4), 16), type: parseInt(propTagStr.substring(4, 8), 16) };
-    } catch (e) { return null; }
-}
+const Utils = {
+    /**
+     * Sanitizes string input for HTML rendering.
+     * @param {string} str - Raw input string.
+     * @returns {string} HTML-safe string.
+     */
+    escapeHTML: (str) => {
+        const div = document.createElement('div');
+        div.textContent = str ?? '';
+        return div.innerHTML;
+    },
 
-function _shouldStoreProperty(propId, newPropType, existingProp) {
-    let isBodyProperty = (propId === PROP_ID_BODY || propId === PROP_ID_HTML_BODY);
-    if (!isBodyProperty || !existingProp) return true;
-    
-    // Prefer String types over other types for body
-    let existingIsText = (existingProp.type === PROP_TYPE_STRING || existingProp.type === PROP_TYPE_STRING8);
-    let newIsText = (newPropType === PROP_TYPE_STRING || newPropType === PROP_TYPE_STRING8);
-    
-    if (existingIsText && !newIsText) return false;
-    if (!existingIsText && newIsText) return true;
-    return false;
-}
+    /**
+     * Generates a pseudo-random identifier.
+     * @returns {string} UUID or timestamp-based string.
+     */
+    generateId: () => {
+        if (crypto?.randomUUID) return crypto.randomUUID();
+        return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    },
 
-function parseAddress(addr) {
-    if (!addr) return { name: '', email: null };
-    addr = addr.trim();
-    let email = addr, name = addr;
-    let match = addr.match(/^(.*)<([^>]+)>$/);
-    if (match) { name = match[1].trim().replace(/^"|"$/g, ''); email = match[2].trim(); }
-    let emailMatch = email.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i);
-    if (emailMatch) {
-        email = emailMatch[0];
-        if (name === addr) name = (name === email) ? '' : name.replace(email, '').trim();
-    } else email = null;
-    return { name, email };
-}
+    /**
+     * Delays execution of a function until after a wait period.
+     * @param {Function} func - Target function.
+     * @param {number} delay - Wait time in ms.
+     * @returns {Function} Debounced function.
+     */
+    debounce: (func, delay) => {
+        let timeout;
+        return (...args) => {
+            clearTimeout(timeout);
+            timeout = setTimeout(() => func(...args), delay);
+        };
+    },
 
-/**
- * Main Parser Class
- */
-function MsgReaderParser(arrayBuffer) {
-    if (!(arrayBuffer instanceof ArrayBuffer) && !(arrayBuffer instanceof Uint8Array)) {
-        throw new Error("MsgReader: Input must be ArrayBuffer or Uint8Array.");
-    }
-    this.buffer = arrayBuffer instanceof ArrayBuffer ? arrayBuffer : new Uint8Array(arrayBuffer).buffer;
-    this.dataView = new DataView(this.buffer);
-    this.header = null; this.fat = null; this.miniFat = null;
-    this.directoryEntries = []; this.properties = {}; this._mimeScanCache = null;
-}
+    /**
+     * Writes text to the system clipboard.
+     * @param {string} text - Text to copy.
+     * @returns {Promise<boolean>} Success status.
+     */
+    copyToClipboard: async (text) => {
+        try {
+            await navigator.clipboard.writeText(text);
+            return true;
+        } catch (err) {
+            console.error('Clipboard write failed:', err);
+            return false;
+        }
+    },
 
-MsgReaderParser.prototype.parse = function() {
-    this.readHeader(); this.readFAT(); this.readMiniFAT(); this.readDirectory(); this.extractProperties();
-    return {
-        getFieldValue: this.getFieldValue.bind(this),
-        subject: this.getFieldValue('subject'),
-        body: this.getFieldValue('body'),
-        bodyHTML: this.getFieldValue('bodyHTML'),
-        recipients: this.getFieldValue('recipients')
-    };
-};
+    /**
+     * Triggers a browser download for the provided content.
+     * @param {string} content - File content.
+     * @param {string} filename - Output filename.
+     * @param {string} mimeType - MIME type (e.g., 'text/csv').
+     */
+    downloadFile: (content, filename, mimeType) => {
+        const blob = new Blob([content], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    },
 
-MsgReaderParser.prototype.parseMime = function() {
-    this._mimeScanCache = null;
-    let rawText = '';
-    try { rawText = new TextDecoder('utf-8', { fatal: false }).decode(this.dataView); }
-    catch (e) { 
-        try { rawText = new TextDecoder('latin1').decode(this.dataView); }
-        catch (e2) { rawText = ''; }
-    }
-    
-    let mimeData = this._scanBufferForMimeText(rawText);
-    let recipients = [];
-    
-    let parseMimeAddresses = (addrString, type) => {
-        if (!addrString) return;
-        addrString.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).forEach(addr => {
-            let parsed = parseAddress(addr);
-            if (parsed.email) recipients.push({ name: parsed.name, email: parsed.email, recipientType: type });
+    /**
+     * Opens the system file picker dialog.
+     * @param {Function} callback - Handler for the selected file.
+     * @param {string} accept - File type filter.
+     */
+    openFilePicker: (callback, accept = '*') => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = accept;
+        input.onchange = (e) => {
+            if (e.target.files[0]) callback(e.target.files[0]);
+        };
+        input.click();
+    },
+
+    /**
+     * Wrapper for FileReader API.
+     * @param {File} file - File object to read.
+     * @returns {Promise<string>} File content.
+     */
+    readTextFile: (file) => {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = (e) => resolve(e.target.result);
+            reader.onerror = () => reject(new Error('FileReader error'));
+            reader.readAsText(file);
         });
-    };
+    },
 
-    parseMimeAddresses(mimeData.to, RECIPIENT_TYPE_TO);
-    parseMimeAddresses(mimeData.cc, RECIPIENT_TYPE_CC);
-    let bccMatch = rawText.match(/^Bcc:\s*([^\r\n]+)/im);
-    if (bccMatch) parseMimeAddresses(bccMatch[1].trim(), RECIPIENT_TYPE_BCC);
+    /**
+     * Parses a single CSV line, handling quoted fields and commas.
+     * @param {string} line - Raw CSV line.
+     * @returns {string[]} Array of field values.
+     */
+    parseCSVLine: (line) => {
+        const values = [];
+        let currentVal = '';
+        let inQuotes = false;
 
-    this.properties[PROP_ID_SUBJECT] = { id: PROP_ID_SUBJECT, value: mimeData.subject };
-    this.properties[PROP_ID_BODY] = { id: PROP_ID_BODY, value: mimeData.body };
-    this.properties[PROP_ID_HTML_BODY] = { id: PROP_ID_HTML_BODY, value: null };
-    this.properties['recipients'] = { id: 0, value: recipients };
-
-    return {
-        getFieldValue: this.getFieldValue.bind(this),
-        subject: mimeData.subject,
-        body: mimeData.body,
-        bodyHTML: null, recipients: recipients
-    };
-};
-
-MsgReaderParser.prototype.readHeader = function() {
-    if (this.buffer.byteLength < 512) throw new Error('File too small to be a valid OLE file');
-    if (this.dataView.getUint32(0, true) !== 0xE011CFD0) throw new Error('Invalid OLE file signature.');
-    this.header = {
-        sectorShift: this.dataView.getUint16(30, true),
-        miniSectorShift: this.dataView.getUint16(32, true),
-        fatSectors: this.dataView.getUint32(44, true),
-        directoryFirstSector: this.dataView.getUint32(48, true),
-        miniFatFirstSector: this.dataView.getUint32(60, true),
-        miniFatTotalSectors: this.dataView.getUint32(64, true),
-        difFirstSector: this.dataView.getUint32(68, true),
-        difTotalSectors: this.dataView.getUint32(72, true)
-    };
-    this.header.sectorSize = Math.pow(2, this.header.sectorShift);
-    this.header.miniSectorSize = Math.pow(2, this.header.miniSectorShift);
-};
-
-MsgReaderParser.prototype.readFAT = function() {
-    let sectorSize = this.header.sectorSize, entriesPerSector = sectorSize / 4;
-    this.fat = [];
-    let fatSectorPositions = [];
-    for (let i = 0; i < 109 && i < this.header.fatSectors; i++) {
-        let s = this.dataView.getUint32(76 + i * 4, true);
-        if (s !== 0xFFFFFFFE && s !== 0xFFFFFFFF) fatSectorPositions.push(s);
-    }
-    if (this.header.difTotalSectors > 0) {
-        let difSector = this.header.difFirstSector;
-        let sectorsRead = 0;
-        while (difSector !== 0xFFFFFFFE && difSector !== 0xFFFFFFFF && sectorsRead < this.header.difTotalSectors) {
-            let difOffset = 512 + difSector * sectorSize;
-            for (let j = 0; j < entriesPerSector - 1; j++) {
-                let s = this.dataView.getUint32(difOffset + j * 4, true);
-                if (s !== 0xFFFFFFFE && s !== 0xFFFFFFFF) fatSectorPositions.push(s);
-            }
-            difSector = this.dataView.getUint32(difOffset + (entriesPerSector - 1) * 4, true);
-            sectorsRead++;
-        }
-    }
-    for (let i = 0; i < fatSectorPositions.length; i++) {
-        let offset = 512 + fatSectorPositions[i] * sectorSize;
-        for (let j = 0; j < entriesPerSector; j++) {
-            if (offset + j * 4 + 4 <= this.buffer.byteLength) this.fat.push(this.dataView.getUint32(offset + j * 4, true));
-        }
-    }
-};
-
-MsgReaderParser.prototype.readMiniFAT = function() {
-    if (this.header.miniFatFirstSector === 0xFFFFFFFE) { this.miniFat = []; return; }
-    this.miniFat = [];
-    let sector = this.header.miniFatFirstSector, sectorSize = this.header.sectorSize;
-    let sectorsRead = 0; 
-    while (sector !== 0xFFFFFFFE && sector !== 0xFFFFFFFF && sectorsRead < this.header.miniFatTotalSectors) {
-        let offset = 512 + sector * sectorSize;
-        for (let i = 0; i < sectorSize / 4; i++) {
-            if (offset + i * 4 + 4 <= this.buffer.byteLength) this.miniFat.push(this.dataView.getUint32(offset + i * 4, true));
-        }
-        if (sector >= this.fat.length) break;
-        sector = this.fat[sector];
-        sectorsRead++;
-    }
-};
-
-MsgReaderParser.prototype.readDirectory = function() {
-    let sector = this.header.directoryFirstSector, sectorSize = this.header.sectorSize, entrySize = 128;
-    let sectorsRead = 0;
-    while (sector !== 0xFFFFFFFE && sector !== 0xFFFFFFFF) {
-        let offset = 512 + sector * sectorSize;
-        for (let i = 0; i < sectorSize / entrySize; i++) {
-            let entryOffset = offset + i * entrySize;
-            if (entryOffset + entrySize > this.buffer.byteLength) break;
-            let entry = this.readDirectoryEntry(entryOffset);
-            if (entry && entry.name) this.directoryEntries.push(entry);
-        }
-        if (sector >= this.fat.length) break;
-        sector = this.fat[sector];
-        sectorsRead++;
-    }
-    this.directoryEntries.forEach((de, idx) => de.id = idx);
-};
-
-MsgReaderParser.prototype.readDirectoryEntry = function(offset) {
-    let nameLen = this.dataView.getUint16(offset + 64, true);
-    if (nameLen === 0 || nameLen > 64) return null;
-    let name = dataViewToString(new DataView(this.buffer, offset, Math.min(nameLen, 64)), 'utf16le');
-    let type = this.dataView.getUint8(offset + 66);
-    if (type !== 1 && type !== 2 && type !== 5) return null;
-    return {
-        name: name, type: type,
-        startSector: this.dataView.getUint32(offset + 116, true),
-        size: this.dataView.getUint32(offset + 120, true),
-        leftSiblingId: this.dataView.getInt32(offset + 68, true),
-        rightSiblingId: this.dataView.getInt32(offset + 72, true),
-        childId: this.dataView.getInt32(offset + 76, true),
-        id: -1
-    };
-};
-
-MsgReaderParser.prototype._readSectorChain = function(startSector, sectorSize, fatArray, totalSize) {
-    let data = new Uint8Array(totalSize);
-    let dataOffset = 0;
-    let sector = startSector;
-    
-    while (sector !== 0xFFFFFFFE && sector !== 0xFFFFFFFF && dataOffset < totalSize) {
-        let offset = (fatArray === this.miniFat) 
-            ? sector * sectorSize 
-            : 512 + sector * sectorSize;
-            
-        let sourceData = (fatArray === this.miniFat)
-            ? this._miniStreamData
-            : this.dataView; 
-            
-        let copy = Math.min(sectorSize, totalSize - dataOffset);
-        
-        for (let i = 0; i < copy; i++) {
-            data[dataOffset++] = (fatArray === this.miniFat) 
-                ? sourceData[offset + i] 
-                : sourceData.getUint8(offset + i);
-        }
-        
-        if (sector >= fatArray.length) break;
-        sector = fatArray[sector];
-    }
-    return data;
-};
-
-MsgReaderParser.prototype.readStream = function(entry) {
-    if (!entry || entry.size === 0) return new Uint8Array(0);
-    
-    if (entry.size < 4096 && entry.type !== 5) {
-        let root = this.directoryEntries.find(e => e.type === 5);
-        if (!root) return new Uint8Array(0);
-        
-        if (!this._miniStreamData) {
-             this._miniStreamData = this.readStream(root);
-        }
-        
-        return this._readSectorChain(entry.startSector, this.header.miniSectorSize, this.miniFat, entry.size);
-    } else {
-        return this._readSectorChain(entry.startSector, this.header.sectorSize, this.fat, entry.size);
-    }
-};
-
-MsgReaderParser.prototype._scanBufferForMimeText = function(rawText) {
-    if (this._mimeScanCache) return this._mimeScanCache;
-    
-    if (!rawText) {
-        try { rawText = new TextDecoder('utf-8', { fatal: false }).decode(this.dataView); }
-        catch (e) { 
-            try { rawText = new TextDecoder('latin1').decode(this.dataView); }
-            catch (e2) { 
-                return { subject: null, to: null, cc: null, body: null };
+        for (let i = 0; i < line.length; i++) {
+            const char = line[i];
+            if (inQuotes) {
+                if (char === '"' && line[i + 1] === '"') {
+                    currentVal += '"';
+                    i++;
+                } else if (char === '"') {
+                    inQuotes = false;
+                } else {
+                    currentVal += char;
+                }
+            } else {
+                if (char === '"') inQuotes = true;
+                else if (char === ',') {
+                    values.push(currentVal);
+                    currentVal = '';
+                } else {
+                    currentVal += char;
+                }
             }
         }
-    }
+        values.push(currentVal);
+        return values;
+    },
 
-    let result = { subject: null, to: null, cc: null, body: null };
-    
-    const findField = (name) => {
-        const search = new RegExp(`\\b${name}:\\s*([^\\r\\n]+)`, 'i');
-        const match = rawText.match(search);
-        return match ? match[1].trim() : null;
-    };
-    
-    result.subject = findField('Subject');
-    result.to = findField('To');
-    result.cc = findField('Cc');
-    
-    let headerEndIndex = rawText.indexOf('\r\n\r\n');
-    if (headerEndIndex === -1) headerEndIndex = rawText.indexOf('\n\n');
-    
-    if (headerEndIndex !== -1) {
-        let bodyText = rawText.substring(headerEndIndex + 4);
-        let encoding = null;
-        let charset = 'utf-8'; // Default
-
-        if (/Content-Type:\s*multipart/i.test(rawText)) {
-             const plainMatch = bodyText.match(/Content-Type:\s*text\/plain/i);
-             if (plainMatch) {
-                 const plainTypeIndex = plainMatch.index;
-                 
-                 let start = -1;
-                 let startOffset = 0;
-                 
-                 const rnrn = bodyText.indexOf('\r\n\r\n', plainTypeIndex);
-                 const nn = bodyText.indexOf('\n\n', plainTypeIndex);
-                 
-                 if (rnrn !== -1 && (nn === -1 || rnrn < nn)) {
-                     start = rnrn;
-                     startOffset = 4;
-                 } else if (nn !== -1) {
-                     start = nn;
-                     startOffset = 2;
-                 }
-                 
-                 const partHeaders = bodyText.substring(plainTypeIndex, start);
-                 if (/Content-Transfer-Encoding:\s*quoted-printable/i.test(partHeaders)) {
-                     encoding = 'quoted-printable';
-                 }
-                 
-                 const charsetMatch = partHeaders.match(/charset=["']?([^"';\r\n]+)/i);
-                 if (charsetMatch) charset = charsetMatch[1];
-
-                 if (start !== -1) {
-                     let end = -1;
-                     const boundRN = bodyText.indexOf('\r\n--', start + startOffset);
-                     const boundN = bodyText.indexOf('\n--', start + startOffset);
-                     
-                     if (boundRN !== -1 && (boundN === -1 || boundRN < boundN)) {
-                         end = boundRN;
-                     } else if (boundN !== -1) {
-                         end = boundN;
-                     }
-                     
-                     if (end === -1) end = bodyText.length;
-                     
-                     bodyText = bodyText.substring(start + startOffset, end).trim();
-                 }
-             }
-        } else {
-             if (rawText.match(/^Content-Transfer-Encoding:\s*quoted-printable/im)) {
-                encoding = 'quoted-printable';
-             }
-             // Check global charset
-             const charsetMatch = rawText.match(/charset=["']?([^"';\r\n]+)/i);
-             if (charsetMatch) charset = charsetMatch[1];
-        }
-        
-        result.body = (encoding === 'quoted-printable') ? _decodeQuotedPrintable(bodyText, charset) : bodyText;
-    }
-    
-    this._mimeScanCache = result;
-    return result;
-};
-
-MsgReaderParser.prototype.extractProperties = function() {
-    let self = this, rawProps = {};
-    this.directoryEntries.forEach(entry => {
-        if (entry.name.indexOf('__substg1.0_') !== 0 || entry.name.indexOf('__recip_version1.0_') > -1) return;
-        let propTag = _parsePropTag(entry.name);
-        if (!propTag) return;
-        if (!_shouldStoreProperty(propTag.id, propTag.type, rawProps[propTag.id])) return;
-        rawProps[propTag.id] = { id: propTag.id, type: propTag.type, data: self.readStream(entry) };
-    });
-
-    let getVal = (id, type) => {
-        let p = rawProps[id];
-        return p ? self.convertPropertyValue(p.data, p.type, id) : null;
-    };
-
-    let bodyHtml = getVal(PROP_ID_HTML_BODY, PROP_TYPE_STRING);
-    if (bodyHtml) this.properties[PROP_ID_HTML_BODY] = { id: PROP_ID_HTML_BODY, value: bodyHtml };
-    
-    if (this.properties[PROP_ID_HTML_BODY] && this.properties[PROP_ID_HTML_BODY].value instanceof Uint8Array) {
-        let view = new DataView(this.properties[PROP_ID_HTML_BODY].value.buffer);
-        let decoded = dataViewToString(view, 'utf-8');
-        this.properties[PROP_ID_HTML_BODY].value = decoded;
-        bodyHtml = decoded;
-    }
-
-    let body = getVal(PROP_ID_BODY, PROP_TYPE_STRING);
-    
-    if (body instanceof Uint8Array) {
-         let view = new DataView(body.buffer);
-         body = dataViewToString(view, 'utf-8');
-         this.properties[PROP_ID_BODY] = { id: PROP_ID_BODY, value: body };
-    }
-
-    if (!body && bodyHtml) body = _stripHtml(bodyHtml);
-    if (body) this.properties[PROP_ID_BODY] = { id: PROP_ID_BODY, value: body };
-
-    Object.values(rawProps).forEach(p => {
-        if (p.id !== PROP_ID_BODY && p.id !== PROP_ID_HTML_BODY) {
-            this.properties[p.id] = { id: p.id, value: self.convertPropertyValue(p.data, p.type, p.id) };
-        }
-    });
-
-    let mimeData = this._scanBufferForMimeText(null);
-    if (!this.properties[PROP_ID_SUBJECT]) this.properties[PROP_ID_SUBJECT] = { value: mimeData.subject };
-    if (!this.properties[PROP_ID_BODY]) this.properties[PROP_ID_BODY] = { value: mimeData.body };
-
-    this.extractRecipients();
-};
-
-MsgReaderParser.prototype.convertPropertyValue = function(data, type, propId) {
-    if (!data || data.length === 0) return null;
-    let view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-    
-    const isBodyProp = (propId === PROP_ID_BODY || propId === PROP_ID_HTML_BODY);
-    
-    if (isBodyProp || type === PROP_TYPE_STRING || type === PROP_TYPE_STRING8) {
-        let u16 = '', u8 = '';
-        try { u16 = dataViewToString(view, 'utf16le'); } catch (e) {}
-        try { u8 = dataViewToString(view, 'utf-8'); } catch (e) {}
-        
-        let isPrintable = (s) => {
-            if (!s || s.length === 0) return false;
-            let printableCount = s.replace(/[^\x20-\x7E\n\r\t\u00A0-\u00FF]/g, '').length;
-            return (printableCount / s.length) > 0.7;
+    /**
+     * Serializes an array of objects to a CSV string.
+     * @param {Object[]} data - Data array.
+     * @param {string[]} headers - Column headers.
+     * @returns {string} CSV string.
+     */
+    toCSV: (data, headers) => {
+        const escapeCell = (cell) => {
+            const str = String(cell ?? '');
+            if (str.includes('"') || str.includes(',') || str.includes('\n')) {
+                return `"${str.replace(/"/g, '""')}"`;
+            }
+            return str;
         };
-        
-        let u16IsBetter = isPrintable(u16);
-        let u8IsBetter = isPrintable(u8);
-        
-        if (u8IsBetter && u16IsBetter && u8.length < u16.length && u8.length < 5) {
-             u8IsBetter = false;
-        }
-        
-        let useU16 = false;
-        if (type === PROP_TYPE_STRING8) {
-            useU16 = u16IsBetter && !u8IsBetter;
-        } else {
-            useU16 = u16IsBetter;
-        }
-        
-        let text = useU16 ? u16 : u8;
 
-        if (propId === PROP_ID_BODY) return _normalizeText(_stripHtml(text));
-        
-        return text;
-    }
-    
-    if (type === PROP_TYPE_BINARY) return data;
-    if (type === PROP_TYPE_INTEGER32) return view.byteLength >= 4 ? view.getUint32(0, true) : 0;
-    if (type === PROP_TYPE_BOOLEAN) return view.byteLength > 0 ? view.getUint8(0) !== 0 : false;
-    if (type === PROP_TYPE_TIME) return view.byteLength >= 8 ? filetimeToDate(view.getUint32(0, true), view.getUint32(4, true)) : null;
-    return data;
-};
+        const rows = data.map(obj => 
+            headers.map(h => escapeCell(obj[h])).join(',')
+        );
+        return [headers.join(','), ...rows].join('\n');
+    },
 
-function _extractAddresses(displayString) {
-    let emails = [];
-    if (displayString) {
-        displayString.split(/[;,]/).forEach(addr => {
-            let parsed = parseAddress(addr);
-            if (parsed.email) emails.push(parsed.email.toLowerCase());
+    /**
+     * Parses CSV content into an object array.
+     * @param {string} text - Raw CSV content.
+     * @param {string[]} requiredHeaders - List of mandatory headers for validation.
+     * @returns {Object} Result containing 'data' array and 'errors' array.
+     */
+    parseCSV: (text, requiredHeaders) => {
+        const lines = text.split('\n').filter(l => l.trim());
+        if (lines.length === 0) return { data: [], errors: [] };
+
+        const headers = Utils.parseCSVLine(lines[0]).map(h => h.trim());
+        const errors = [];
+
+        for (const reqHeader of requiredHeaders) {
+            if (!headers.includes(reqHeader)) {
+                errors.push(`Missing header: "${reqHeader}"`);
+            }
+        }
+        if (errors.length > 0) return { data: [], errors };
+
+        const data = lines.slice(1).map((line) => {
+            const values = Utils.parseCSVLine(line);
+            const obj = {};
+            headers.forEach((header, i) => {
+                if (requiredHeaders.includes(header)) {
+                    obj[header] = values[i] || '';
+                }
+            });
+            return obj;
         });
-    }
-    return emails;
-}
 
-MsgReaderParser.prototype.extractRecipients = function() {
-    let self = this;
-    let recipients = [];
-    
-    let recipientStorages = this.directoryEntries.filter(entry => 
-        entry.type === 1 && entry.name.indexOf('__recip_version1.0_') === 0
-    );
-    
-    recipientStorages.forEach(storage => {
-        let recipient = {
-            recipientType: RECIPIENT_TYPE_TO,
-            name: '',
-            email: ''
-        };
+        return { data, errors };
+    }
+};
+
+/* =============================================================================
+   UI MODULE
+   ============================================================================= */
+
+const UI = {
+    /**
+     * Injects a modal into the DOM.
+     * @param {string} title - Modal header.
+     * @param {string} content - HTML content for body.
+     * @param {Object[]} buttons - Array of button configs { label, class, callback }.
+     */
+    showModal: (title, content, buttons = []) => {
+        const overlay = document.getElementById('modal-overlay');
+        const body = document.getElementById('modal-body');
         
-        let findChildren = (parentId) => {
-            let parent = self.directoryEntries[parentId];
-            if (!parent || parent.childId === -1) return [];
-            let children = [];
-            let stack = [parent.childId];
-            let visited = new Set();
-            
-            while (stack.length > 0) {
-                let id = stack.pop();
-                if (id === -1 || visited.has(id)) continue;
-                visited.add(id);
-                let entry = self.directoryEntries[id];
-                if (!entry) continue;
-                children.push(entry);
-                if (entry.leftSiblingId !== -1) stack.push(entry.leftSiblingId);
-                if (entry.rightSiblingId !== -1) stack.push(entry.rightSiblingId);
+        body.innerHTML = `
+            <h3>${Utils.escapeHTML(title)}</h3>
+            <div>${content}</div>
+            <div class="modal-actions"></div>
+        `;
+
+        const actions = body.querySelector('.modal-actions');
+        buttons.forEach(btn => {
+            const button = document.createElement('button');
+            button.className = btn.class || 'btn-secondary';
+            button.textContent = btn.label;
+            button.onclick = () => {
+                // If callback returns explicit false, do not close modal
+                if (btn.callback) {
+                    const result = btn.callback();
+                    if (result === false) return;
+                }
+                UI.hideModal();
+            };
+            actions.appendChild(button);
+        });
+
+        overlay.classList.add('show');
+    },
+
+    hideModal: () => {
+        document.getElementById('modal-overlay').classList.remove('show');
+    },
+
+    /**
+     * Displays a transient toast notification.
+     */
+    showToast: (() => {
+        let timeout;
+        return (message) => {
+            const toast = document.getElementById('toast');
+            clearTimeout(timeout);
+            toast.textContent = message;
+            toast.classList.add('show');
+            timeout = setTimeout(() => toast.classList.remove('show'), 3000);
+        };
+    })(),
+
+    /**
+     * Generic list renderer.
+     * @param {HTMLElement} container - DOM target.
+     * @param {Array} items - Data items.
+     * @param {string} emptyMessage - Text to show if items is empty.
+     * @param {Function} createItemFn - Factory function returning an HTMLElement.
+     */
+    renderList: (container, items, emptyMessage, createItemFn) => {
+        container.innerHTML = '';
+        
+        if (!items || items.length === 0) {
+            container.innerHTML = `<div class="empty-state-message">${emptyMessage}</div>`;
+            return;
+        }
+
+        const fragment = document.createDocumentFragment();
+        items.forEach(item => {
+            const element = createItemFn(item);
+            if (element) fragment.appendChild(element);
+        });
+        container.appendChild(fragment);
+    }
+};
+
+/* =============================================================================
+   ASSETS
+   ============================================================================= */
+
+const Icons = {
+    folder: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M.54 3.87.5 3.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 .5.5v.07L6.2 7H1.12zM0 4.25a.5.5 0 0 1 .5-.5h6.19l.74 1.85a.5.5 0 0 1 .44.25h4.13a.5.5 0 0 1 .5.5v.5a.5.5 0 0 1-.5.5H.5a.5.5 0 0 1-.5-.5zM.5 7a.5.5 0 0 0-.5.5v5a.5.5 0 0 0 .5.5h15a.5.5 0 0 0 .5-.5v-5a.5.5 0 0 0-.5-.5z"/></svg>',
+    template: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M0 4a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V4Zm2-1a1 1 0 0 0-1 1v.217l7 4.2 7-4.2V4a1 1 0 0 0-1-1H2Zm13 2.383-4.708 2.825L15 11.105V5.383Zm-.034 6.876-5.64-3.471L8 9.583l-1.326-.795-5.64 3.47A1 1 0 0 0 2 13h12a1 1 0 0 0 .966-.741ZM1 11.105l4.708-2.897L1 5.383v5.722Z"/></svg>',
+    trash: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16"><path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5Zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5Zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6Z"/><path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1ZM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118ZM2.5 3h11V2h-11v1Z"/></svg>',
+    move: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16"><path fill-rule="evenodd" d="M15 2a1 1 0 0 0-1-1H2a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V2zM0 2a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V2zm5.854 8.854a.5.5 0 1 0-.708-.708L4 11.293V1.5a.5.5 0 0 0-1 0v9.793l-1.146-1.147a.5.5 0 0 0-.708.708l2 2a.5.5 0 0 0 .708 0l2-2z"/></svg>',
+    edit: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16"><path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168l10-10zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207 11.207 2.5zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293l6.5-6.5zm-9.761 5.175-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 0 1 5 12.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.468-.325z"/></svg>'
+};
+
+/* =============================================================================
+   STATE MANAGEMENT
+   ============================================================================= */
+
+const State = {
+    data: null,
+    currentFolderId: 'root',
+    currentEditingId: null, // Track if we are editing an existing template
+
+    load: () => {
+        try {
+            const stored = localStorage.getItem(CONFIG.STORAGE_KEY);
+            if (!stored) {
+                State.data = { library: [] };
+                return;
             }
-            return children;
-        };
-        
-        let children = findChildren(storage.id);
-        children.forEach(child => {
-            let propTag = _parsePropTag(child.name);
-            if (!propTag) return;
-            
-            let propData = self.readStream(child);
-            let propValue = self.convertPropertyValue(propData, propTag.type, propTag.id);
-            
-            if (propTag.id === PROP_ID_RECIPIENT_TYPE) {
-                recipient.recipientType = propValue || RECIPIENT_TYPE_TO;
-            } else if (propTag.id === PROP_ID_RECIPIENT_DISPLAY_NAME) {
-                recipient.name = propValue || '';
-            } else if (propTag.id === PROP_ID_RECIPIENT_EMAIL_ADDRESS || propTag.id === PROP_ID_RECIPIENT_SMTP_ADDRESS) {
-                if (propValue && propValue.indexOf('@') > -1) {
-                    recipient.email = propValue;
+            const parsed = JSON.parse(stored);
+            State.data = Array.isArray(parsed) ? { library: parsed } : parsed;
+        } catch (err) {
+            console.error('State load failed:', err);
+            State.data = { library: [] };
+        }
+    },
+
+    save: () => {
+        try {
+            localStorage.setItem(CONFIG.STORAGE_KEY, JSON.stringify(State.data));
+        } catch (err) {
+            console.error('State save failed:', err);
+            UI.showToast('Failed to save data');
+        }
+    },
+
+    findItem: (id, items = State.data.library, parent = null) => {
+        if (id === 'root') {
+            return { id: 'root', name: 'Root', type: 'folder', children: State.data.library };
+        }
+        for (const item of items) {
+            if (item.id === id) return { item, parent };
+            if (item.type === 'folder' && item.children) {
+                const result = State.findItem(id, item.children, item);
+                if (result) return result;
+            }
+        }
+        return null;
+    },
+
+    getAllFolders: (items = State.data.library, level = 0) => {
+        let folders = [];
+        if (level === 0) folders.push({ id: 'root', name: 'Root', level: 0 });
+        items.forEach(item => {
+            if (item.type === 'folder') {
+                folders.push({ id: item.id, name: item.name, level: level + 1 });
+                if (item.children) {
+                    folders = folders.concat(State.getAllFolders(item.children, level + 1));
                 }
             }
         });
-        
-        if (recipient.email || recipient.name) {
-            recipients.push(recipient);
+        return folders;
+    },
+
+    getBreadcrumb: (folderId) => {
+        if (folderId === 'root') return [{ id: 'root', name: 'Root' }];
+        const path = [];
+        const stack = State.data.library.map(item => [item, []]);
+        const visited = new Set();
+        while (stack.length > 0) {
+            const [curr, parentPath] = stack.pop();
+            if (visited.has(curr.id)) continue;
+            visited.add(curr.id);
+            const currentPath = [...parentPath, { id: curr.id, name: curr.name }];
+            if (curr.id === folderId) {
+                path.push(...currentPath);
+                break;
+            }
+            if (curr.type === 'folder' && curr.children) {
+                for (let i = curr.children.length - 1; i >= 0; i--) {
+                    stack.push([curr.children[i], currentPath]);
+                }
+            }
         }
-    });
-    
-    let displayTo = this.properties[PROP_ID_DISPLAY_TO] ? this.properties[PROP_ID_DISPLAY_TO].value : null;
-    let displayCc = this.properties[PROP_ID_DISPLAY_CC] ? this.properties[PROP_ID_DISPLAY_CC].value : null;
-    
-    if (displayTo || displayCc) {
-        let displayToEmails = _extractAddresses(displayTo);
-        let displayCcEmails = _extractAddresses(displayCc);
-        
-        let toEmailCounts = {};
-        let ccEmailCounts = {};
-        
-        displayToEmails.forEach(email => {
-            toEmailCounts[email] = (toEmailCounts[email] || 0) + 1;
-        });
-        
-        displayCcEmails.forEach(email => {
-            ccEmailCounts[email] = (ccEmailCounts[email] || 0) + 1;
-        });
-        
-        recipients.forEach(recipient => {
-            let emailKey = recipient.email.toLowerCase();
-            
-            if (ccEmailCounts[emailKey] && ccEmailCounts[emailKey] > 0) {
-                recipient.recipientType = RECIPIENT_TYPE_CC;
-                ccEmailCounts[emailKey]--;
+        return [{ id: 'root', name: 'Root' }, ...path];
+    },
+
+    flattenLibrary: (items = State.data.library, parentPath = '') => {
+        let flattened = [];
+        items.forEach(item => {
+            const currentPath = parentPath ? `${parentPath}/${item.name}` : item.name;
+            if (item.type === 'template') {
+                const parsed = MailTo.parse(item.mailto);
+                flattened.push({
+                    name: item.name,
+                    path: parentPath || '/',
+                    to: parsed.to,
+                    cc: parsed.cc,
+                    bcc: parsed.bcc,
+                    subject: parsed.subject,
+                    body: parsed.body
+                });
             }
-            else if (toEmailCounts[emailKey] && toEmailCounts[emailKey] > 0) {
-                recipient.recipientType = RECIPIENT_TYPE_TO;
-                toEmailCounts[emailKey]--;
+            if (item.type === 'folder' && item.children) {
+                flattened = flattened.concat(State.flattenLibrary(item.children, currentPath));
             }
         });
+        return flattened;
+    },
+
+    importFromCSV: (records) => {
+        const folderMap = new Map([['/', State.data.library]]);
+        records.forEach(record => {
+            let path = (record.path || '/').trim();
+            if (!path.startsWith('/')) path = '/' + path;
+            if (!folderMap.has(path)) {
+                const parts = path.split('/').filter(p => p);
+                let currentPath = '/';
+                let currentArray = State.data.library;
+                parts.forEach(part => {
+                    const nextPath = currentPath === '/' ? `/${part}` : `${currentPath}/${part}`;
+                    if (!folderMap.has(nextPath)) {
+                        let folder = currentArray.find(item => item.type === 'folder' && item.name === part);
+                        if (!folder) {
+                            folder = { id: Utils.generateId(), type: 'folder', name: part, children: [] };
+                            currentArray.push(folder);
+                        }
+                        folderMap.set(nextPath, folder.children);
+                    }
+                    currentArray = folderMap.get(nextPath);
+                    currentPath = nextPath;
+                });
+            }
+            const targetArray = folderMap.get(path);
+            const mailto = MailTo.build({
+                to: record.to, cc: record.cc, bcc: record.bcc, subject: record.subject, body: record.body
+            });
+            targetArray.push({ id: Utils.generateId(), type: 'template', name: record.name, mailto: mailto });
+        });
     }
-    
-    this.properties['recipients'] = { id: 0, value: recipients };
 };
 
-MsgReaderParser.prototype.getFieldValue = function(name) {
-    let id = { subject: PROP_ID_SUBJECT, body: PROP_ID_BODY, bodyHTML: PROP_ID_HTML_BODY }[name];
-    if (name === 'recipients') return this.properties['recipients'] ? this.properties['recipients'].value : [];
-    return (this.properties[id]) ? this.properties[id].value : null;
-};
+/* =============================================================================
+   MAILTO PROTOCOL
+   ============================================================================= */
 
-// --- Exported Object ---
-const MsgReader = {
-    read: function(arrayBuffer) {
-        let reader = new MsgReaderParser(arrayBuffer);
-        if (reader.dataView.byteLength < 8) return reader.parseMime();
-        let sig = reader.dataView.getUint32(0, true);
-        return (sig === 0xE011CFD0) ? reader.parse() : reader.parseMime();
+const MailTo = {
+    parse: (str) => {
+        const data = { to: '', cc: '', bcc: '', subject: '', body: '' };
+        if (!str || !str.startsWith('mailto:')) return data;
+        try {
+            const qIndex = str.indexOf('?');
+            if (qIndex === -1) {
+                data.to = decodeURIComponent(str.substring(7));
+                return data;
+            }
+            data.to = decodeURIComponent(str.substring(7, qIndex));
+            const params = new URLSearchParams(str.substring(qIndex + 1));
+            ['subject', 'body', 'cc', 'bcc'].forEach(key => {
+                if (params.has(key)) data[key] = params.get(key);
+            });
+        } catch (err) {
+            console.error('Parse error:', err);
+        }
+        return data;
+    },
+
+    build: (data) => {
+        try {
+            const params = [];
+            CONFIG.MAILTO_PARAMS.forEach(key => {
+                if (data[key]) params.push(`${key}=${encodeURIComponent(data[key])}`);
+            });
+            if (data.body) {
+                params.push(`body=${encodeURIComponent(data.body).replace(/%0A/g, '%0D%0A')}`);
+            }
+            return `mailto:${encodeURIComponent(data.to || '')}?${params.join('&')}`;
+        } catch (err) {
+            console.error('Build error:', err);
+            return '';
+        }
     }
 };
 
-export { MsgReader };
+/* =============================================================================
+   CONTROLLER
+   ============================================================================= */
+
+const App = {
+    elements: {},
+
+    init: async () => {
+        App.elements = {
+            treeContainer: document.getElementById('tree-list-container'),
+            breadcrumb: document.getElementById('breadcrumb-container'),
+            uploadWrapper: document.getElementById('upload-wrapper'),
+            fileInput: document.getElementById('msg-upload'),
+            resultTo: document.getElementById('result-to'),
+            resultCc: document.getElementById('result-cc'),
+            resultBcc: document.getElementById('result-bcc'),
+            resultSubject: document.getElementById('result-subject'),
+            resultBody: document.getElementById('result-body'),
+            resultMailto: document.getElementById('result-mailto'),
+            resultLink: document.getElementById('result-link'),
+            outputWrapper: document.getElementById('output-wrapper'),
+            btnNewFolder: document.getElementById('btn-new-folder'),
+            btnSave: document.getElementById('btn-save-to-library'),
+            btnClear: document.getElementById('btn-clear-all'),
+            btnCopy: document.getElementById('copy-mailto-btn'),
+            btnImportCSV: document.getElementById('btn-import-csv'),
+            btnExportCSV: document.getElementById('btn-export-csv')
+        };
+
+        try {
+            const module = await import('./msgreader.js');
+            window.MsgReader = module.MsgReader;
+        } catch (err) {
+            console.error('MsgReader module unavailable:', err);
+            UI.showToast('Email file import disabled');
+        }
+
+        State.load();
+        App.attachEventListeners();
+        App.renderLibrary();
+        
+        // Initial live update check
+        App.updatePreview();
+    },
+
+    attachEventListeners: () => {
+        // Upload handling
+        App.elements.uploadWrapper.addEventListener('click', () => App.elements.fileInput.click());
+        App.elements.fileInput.addEventListener('change', (e) => { if (e.target.files[0]) App.handleFileUpload(e.target.files[0]); });
+        ['dragenter', 'dragover'].forEach(evt => App.elements.uploadWrapper.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); }));
+        App.elements.uploadWrapper.addEventListener('drop', (e) => { e.preventDefault(); e.stopPropagation(); if (e.dataTransfer.files[0]) App.handleFileUpload(e.dataTransfer.files[0]); });
+
+        // Buttons
+        App.elements.btnNewFolder.addEventListener('click', App.createFolder);
+        App.elements.btnSave.addEventListener('click', App.openSaveModal);
+        App.elements.btnClear.addEventListener('click', App.clearForm);
+        App.elements.btnCopy.addEventListener('click', App.copyLink);
+        App.elements.btnImportCSV.addEventListener('click', App.importCSV);
+        App.elements.btnExportCSV.addEventListener('click', App.exportCSV);
+
+        // Tree navigation
+        App.elements.treeContainer.addEventListener('click', App.handleTreeClick);
+        App.elements.breadcrumb.addEventListener('click', App.handleBreadcrumbClick);
+
+        // Live Preview Listeners
+        const inputs = ['resultTo', 'resultCc', 'resultBcc', 'resultSubject', 'resultBody'];
+        inputs.forEach(id => {
+            App.elements[id].addEventListener('input', App.updatePreview);
+        });
+
+        document.getElementById('modal-overlay').addEventListener('click', (e) => {
+            if (e.target.id === 'modal-overlay') UI.hideModal();
+        });
+    },
+
+    handleFileUpload: (file) => {
+        if (!window.MsgReader) {
+            UI.showToast('Parser module not loaded');
+            return;
+        }
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const parsed = window.MsgReader.read(e.target.result);
+                App.elements.resultSubject.value = parsed.subject || '';
+                App.elements.resultBody.value = parsed.body || '';
+                const recipientMap = { 1: [], 2: [], 3: [] };
+                parsed.recipients.forEach(r => {
+                    const addr = r.email || (r.name?.includes('@') ? r.name : '');
+                    if (addr) recipientMap[r.recipientType || 1].push(addr);
+                });
+                App.elements.resultTo.value = recipientMap[1].join(', ');
+                App.elements.resultCc.value = recipientMap[2].join(', ');
+                App.elements.resultBcc.value = recipientMap[3].join(', ');
+                
+                App.updatePreview();
+                UI.showToast('File imported');
+            } catch (err) {
+                UI.showModal('Import Error', `<p>${Utils.escapeHTML(err.message)}</p>`, [{ label: 'OK' }]);
+            }
+        };
+        reader.readAsArrayBuffer(file);
+    },
+
+    updatePreview: () => {
+        const data = {
+            to: App.elements.resultTo.value,
+            cc: App.elements.resultCc.value,
+            bcc: App.elements.resultBcc.value,
+            subject: App.elements.resultSubject.value,
+            body: App.elements.resultBody.value
+        };
+        const mailto = MailTo.build(data);
+        App.elements.resultMailto.value = mailto;
+        App.elements.resultLink.href = mailto;
+        App.elements.outputWrapper.classList.remove('hidden');
+    },
+
+    openSaveModal: () => {
+        const folders = State.getAllFolders();
+        const defaultName = App.elements.resultSubject.value.trim() || 'Untitled Template';
+        
+        const folderOptions = folders.map(f => 
+            `<option value="${f.id}" ${f.id === State.currentFolderId ? 'selected' : ''}>${'&nbsp;'.repeat(f.level * 2)}${f.level > 0 ? '📂 ' : ''}${Utils.escapeHTML(f.name)}</option>`
+        ).join('');
+
+        UI.showModal('Save Template', `
+            <div class="form-group">
+                <label for="modal-save-name">Template Name</label>
+                <input type="text" id="modal-save-name" class="form-input" value="${Utils.escapeHTML(defaultName)}">
+            </div>
+            <div class="form-group">
+                <label for="modal-save-folder">Location</label>
+                <div style="display:flex; gap:0.5rem;">
+                    <select id="modal-save-folder" class="form-input" style="flex-grow:1;">
+                        ${folderOptions}
+                    </select>
+                    <button id="btn-modal-new-folder" class="btn-secondary" title="New Folder" style="width:auto; padding:0 0.8rem;">+</button>
+                </div>
+            </div>
+        `, [
+            { label: 'Cancel' },
+            { label: 'Save', class: 'btn-primary', callback: () => App.performSave() }
+        ]);
+
+        // Handle create new folder from within save modal
+        document.getElementById('btn-modal-new-folder').onclick = () => {
+            const folderName = prompt("Enter name for new folder:");
+            if (folderName && folderName.trim()) {
+                // Create inside the currently selected folder in the dropdown
+                const parentId = document.getElementById('modal-save-folder').value;
+                const parentRes = State.findItem(parentId);
+                const parentFolder = parentRes?.item || parentRes || { children: State.data.library };
+                
+                if (!parentFolder.children) parentFolder.children = [];
+                const newFolderId = Utils.generateId();
+                parentFolder.children.push({
+                    id: newFolderId,
+                    type: 'folder',
+                    name: folderName.trim(),
+                    children: []
+                });
+                State.save();
+                
+                // Refresh modal state
+                const currentName = document.getElementById('modal-save-name').value;
+                App.openSaveModal(); // Re-render
+                
+                // Restore state
+                setTimeout(() => {
+                    document.getElementById('modal-save-name').value = currentName;
+                    document.getElementById('modal-save-folder').value = newFolderId; 
+                }, 0);
+            }
+        };
+    },
+
+    performSave: () => {
+        const nameInput = document.getElementById('modal-save-name');
+        const folderInput = document.getElementById('modal-save-folder');
+        const name = nameInput.value.trim();
+        const folderId = folderInput.value;
+
+        if (!name) {
+            UI.showToast('Name required');
+            return false; // Keep modal open
+        }
+
+        const targetRes = State.findItem(folderId);
+        const targetFolder = targetRes?.item || targetRes || { children: State.data.library };
+        if (!targetFolder.children) targetFolder.children = [];
+
+        // Check for overwrite
+        const existingIndex = targetFolder.children.findIndex(c => c.type === 'template' && c.name === name);
+        
+        // Ensure we are saving the LATEST content from the form
+        const data = {
+            to: App.elements.resultTo.value,
+            cc: App.elements.resultCc.value,
+            bcc: App.elements.resultBcc.value,
+            subject: App.elements.resultSubject.value,
+            body: App.elements.resultBody.value
+        };
+        const freshMailto = MailTo.build(data);
+        App.elements.resultMailto.value = freshMailto;
+        App.elements.resultLink.href = freshMailto;
+        
+        if (existingIndex >= 0) {
+            targetFolder.children[existingIndex].mailto = freshMailto;
+            UI.showToast(`Updated "${name}"`);
+        } else {
+            targetFolder.children.push({
+                id: Utils.generateId(),
+                type: 'template',
+                name: name,
+                mailto: freshMailto
+            });
+            UI.showToast('Saved new template');
+        }
+
+        State.save();
+        App.renderLibrary();
+        return true; // Close modal
+    },
+
+    createFolder: () => {
+        UI.showModal('New Folder', `
+            <div class="form-group">
+                <label for="folder-name">Folder Name</label>
+                <input type="text" id="folder-name" class="form-input" placeholder="Name">
+            </div>
+        `, [
+            { label: 'Cancel' },
+            { label: 'Create', class: 'btn-primary', callback: () => {
+                const input = document.getElementById('folder-name');
+                const name = input.value.trim();
+                if (!name) {
+                    UI.showToast('Name required');
+                    return false;
+                }
+                const result = State.findItem(State.currentFolderId);
+                const folder = result?.item || result || { children: State.data.library };
+                if (!folder.children) folder.children = [];
+                folder.children.push({
+                    id: Utils.generateId(),
+                    type: 'folder',
+                    name: name,
+                    children: []
+                });
+                State.save();
+                App.renderLibrary();
+            }}
+        ]);
+    },
+
+    clearForm: () => {
+        ['resultTo', 'resultCc', 'resultBcc', 'resultSubject', 'resultBody'].forEach(k => App.elements[k].value = '');
+        if (App.elements.fileInput) App.elements.fileInput.value = '';
+        App.updatePreview();
+        UI.showToast('Form cleared');
+    },
+
+    copyLink: () => {
+        const link = App.elements.resultMailto.value;
+        if (link) {
+            Utils.copyToClipboard(link).then(success => UI.showToast(success ? 'Copied' : 'Copy failed'));
+        }
+    },
+
+    exportCSV: () => {
+        const data = State.flattenLibrary();
+        if (data.length === 0) { UI.showToast('Library is empty'); return; }
+        const csvContent = Utils.toCSV(data, CONFIG.CSV_HEADERS);
+        Utils.downloadFile(csvContent, `mailto-export-${new Date().toISOString().slice(0,10)}.csv`, 'text/csv');
+    },
+
+    importCSV: () => {
+        Utils.openFilePicker((file) => {
+            Utils.readTextFile(file).then(text => {
+                const { data, errors } = Utils.parseCSV(text, CONFIG.CSV_HEADERS);
+                if (errors.length > 0) {
+                    UI.showModal('Import Errors', `<ul style="color: var(--danger); padding-left: 1rem;">${errors.map(e => `<li>${Utils.escapeHTML(e)}</li>`).join('')}</ul>`, [{ label: 'OK' }]);
+                    return;
+                }
+                if (data.length === 0) { UI.showToast('No data found'); return; }
+                State.importFromCSV(data);
+                State.save();
+                App.renderLibrary();
+                UI.showToast(`Imported ${data.length} items`);
+            });
+        }, '.csv');
+    },
+
+    renderLibrary: () => {
+        const path = State.getBreadcrumb(State.currentFolderId);
+        App.elements.breadcrumb.innerHTML = path.map((p, i) => 
+            i === path.length - 1 
+            ? `<span class="breadcrumb-current">${Utils.escapeHTML(p.name)}</span>`
+            : `<a href="#" class="breadcrumb-link" data-id="${p.id}">${Utils.escapeHTML(p.name)}</a><span class="breadcrumb-sep">/</span>`
+        ).join('');
+
+        const result = State.findItem(State.currentFolderId);
+        const items = result?.item?.children || result?.children || State.data.library;
+        const sortedItems = [...items].sort((a, b) => (a.type === b.type) ? a.name.localeCompare(b.name) : (a.type === 'folder' ? -1 : 1));
+
+        UI.renderList(App.elements.treeContainer, sortedItems, 'Empty folder', (item) => {
+            const div = document.createElement('div');
+            div.className = 'list-item';
+            div.dataset.id = item.id;
+            div.dataset.type = item.type;
+            const isFolder = item.type === 'folder';
+            div.innerHTML = `
+                <div class="item-icon ${isFolder ? 'folder' : 'template'}">${isFolder ? Icons.folder : Icons.template}</div>
+                <div class="item-name" title="${Utils.escapeHTML(item.name)}">${Utils.escapeHTML(item.name)}</div>
+                <div class="item-actions">
+                    <button class="action-btn move-btn" title="Move">${Icons.move}</button>
+                    ${!isFolder ? '' : `<button class="action-btn edit-btn" title="Rename">${Icons.edit}</button>`}
+                    <button class="action-btn delete-btn" title="Delete">${Icons.trash}</button>
+                </div>
+            `;
+            return div;
+        });
+    },
+
+    handleTreeClick: (e) => {
+        const itemEl = e.target.closest('.list-item');
+        if (!itemEl) return;
+        const id = itemEl.dataset.id;
+        const type = itemEl.dataset.type;
+        const result = State.findItem(id);
+        if (!result) return;
+        const item = result.item;
+
+        if (type === 'folder' && (e.target.classList.contains('item-name') || e.target.classList.contains('item-icon'))) {
+            State.currentFolderId = id;
+            App.renderLibrary();
+            return;
+        }
+
+        if (e.target.closest('.delete-btn')) {
+            UI.showModal('Confirm Delete', `Delete "${Utils.escapeHTML(item.name)}"?`, [
+                { label: 'Cancel' },
+                { label: 'Delete', class: 'btn-danger', callback: () => {
+                    const parent = result.parent || { children: State.data.library };
+                    parent.children = parent.children.filter(c => c.id !== id);
+                    State.save();
+                    App.renderLibrary();
+                }}
+            ]);
+        } else if (e.target.closest('.edit-btn')) {
+            if (type === 'folder') {
+                // Rename folder logic
+                UI.showModal('Rename Folder', `
+                    <div class="form-group">
+                        <input type="text" id="rename-input" class="form-input" value="${Utils.escapeHTML(item.name)}">
+                    </div>
+                `, [
+                    { label: 'Cancel' },
+                    { label: 'Save', class: 'btn-primary', callback: () => {
+                        const val = document.getElementById('rename-input').value.trim();
+                        if (val) { item.name = val; State.save(); App.renderLibrary(); }
+                    }}
+                ]);
+            }
+        } else if (e.target.closest('.move-btn')) {
+            const folders = State.getAllFolders();
+            UI.showModal('Move Item', `
+                <div class="form-group">
+                    <label>Destination:</label>
+                    <select id="move-select" class="form-input">
+                        ${folders.map(f => `<option value="${f.id}" ${f.id === State.currentFolderId ? 'selected' : ''}>${'&nbsp;'.repeat(f.level * 2)}${f.name}</option>`).join('')}
+                    </select>
+                </div>
+            `, [
+                { label: 'Cancel' },
+                { label: 'Move', class: 'btn-primary', callback: () => {
+                    const targetId = document.getElementById('move-select').value;
+                    if (targetId === id) return;
+                    const targetRes = State.findItem(targetId);
+                    const targetFolder = targetRes?.item || targetRes || { children: State.data.library };
+                    const oldParent = result.parent || { children: State.data.library };
+                    oldParent.children = oldParent.children.filter(c => c.id !== id);
+                    if (!targetFolder.children) targetFolder.children = [];
+                    targetFolder.children.push(item);
+                    State.save();
+                    App.renderLibrary();
+                }}
+            ]);
+        } 
+        // Clicking on the template name itself should also load it
+        else if (type === 'template' && (e.target.classList.contains('item-name') || e.target.classList.contains('item-icon'))) {
+            const parsed = MailTo.parse(item.mailto);
+            App.elements.resultTo.value = parsed.to || '';
+            App.elements.resultCc.value = parsed.cc || '';
+            App.elements.resultBcc.value = parsed.bcc || '';
+            App.elements.resultSubject.value = parsed.subject || '';
+            App.elements.resultBody.value = parsed.body || '';
+            State.currentEditingId = item.id;
+            App.updatePreview();
+            UI.showToast('Template loaded');
+        }
+    },
+
+    handleBreadcrumbClick: (e) => {
+        if (e.target.classList.contains('breadcrumb-link')) {
+            e.preventDefault();
+            State.currentFolderId = e.target.dataset.id;
+            App.renderLibrary();
+        }
+    }
+};
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', App.init);
+} else {
+    App.init();
+}
