@@ -1,7 +1,7 @@
 /**
  * Application Controller
  * Manages DOM interactions, local storage persistence, file processing,
- * and hierarchical data structures for the MailTo Generator.
+ * and hierarchical data structures.
  */
 
 'use strict';
@@ -56,7 +56,7 @@ const Utils = {
     },
 
     /**
-     * writes text to the system clipboard.
+     * Writes text to the system clipboard.
      * @param {string} text - Text to copy.
      * @returns {Promise<boolean>} Success status.
      */
@@ -104,7 +104,7 @@ const Utils = {
     },
 
     /**
-     * wrapper for FileReader API.
+     * Wrapper for FileReader API.
      * @param {File} file - File object to read.
      * @returns {Promise<string>} File content.
      */
@@ -309,7 +309,6 @@ const State = {
 
     /**
      * Loads application state from localStorage.
-     * Handles legacy array format if present.
      */
     load: () => {
         try {
