@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MailTo Link Generator</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="mailto-standalone.js" defer></script>
+    <script type="module" src="msgreader.js" defer></script>
+</head>
+<body>
+    <header class="app-header">
+        <div class="header-content">
+            <h1>MailTo Link Generator</h1>
+            <p class="subtitle">Create, manage, and organize mailto links from email templates</p>
+        </div>
+    </header>
+
+    <div class="app-container">
+        <!-- Library Panel -->
+        <aside class="library-panel">
+            <div class="panel-header">
+                <h2>Template Library</h2>
+                <div class="header-actions">
+                    <button id="btn-new-folder" class="icon-btn" title="New Folder">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M.5 3l.5.5V11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1H3.5L2.5 2H1a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h.5V3zM1 4v7h13V4H1z"/><path d="M8 5.5a.5.5 0 0 1 .5.5v1.5H10a.5.5 0 0 1 0 1H8.5V10a.5.5 0 0 1-1 0V8.5H6a.5.5 0 0 1 0-1h1.5V6a.5.5 0 0 1 .5-.5z"/></svg>
+                    </button>
+                    <button id="btn-import-csv" class="icon-btn" title="Import CSV">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/><path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708l3 3z"/></svg>
+                    </button>
+                    <button id="btn-export-csv" class="icon-btn" title="Export CSV">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/><path d="M7.646 1.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1-.708.708L8.5 2.707V11.5a.5.5 0 0 1-1 0V2.707L5.354 4.854a.5.5 0 1 1-.708-.708l3-3z"/></svg>
+                    </button>
+                </div>
+            </div>
+            <div id="breadcrumb-container" class="breadcrumb-container"></div>
+            <div id="tree-list-container" class="tree-list-container"></div>
+        </aside>
+
+        <!-- Editor Panel -->
+        <main class="editor-panel">
+            <div class="panel-header">
+                <h2>Editor</h2>
+                <button id="btn-clear-all" class="btn-secondary btn-sm">Clear</button>
+            </div>
+
+            <div class="editor-content">
+                <!-- File Upload Zone -->
+                <div id="upload-wrapper" class="upload-zone">
+                    <input type="file" id="msg-upload" accept=".msg,.oft,.eml,.email" hidden>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" viewBox="0 0 16 16"><path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/><path d="M7.646 1.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1-.708.708L8.5 2.707V11.5a.5.5 0 0 1-1 0V2.707L5.354 4.854a.5.5 0 1 1-.708-.708l3-3z"/></svg>
+                    <p><strong>Drop email file here or click to browse</strong></p>
+                    <p class="upload-hint">.msg, .eml, .oft formats supported</p>
+                </div>
+
+                <!-- Input Fields -->
+                <div class="form-group">
+                    <label for="result-to">To</label>
+                    <input type="text" id="result-to" class="form-input" placeholder="recipient@example.com">
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="result-cc">CC</label>
+                        <input type="text" id="result-cc" class="form-input" placeholder="cc@example.com">
+                    </div>
+                    <div class="form-group">
+                        <label for="result-bcc">BCC</label>
+                        <input type="text" id="result-bcc" class="form-input" placeholder="bcc@example.com">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="result-subject">Subject</label>
+                    <input type="text" id="result-subject" class="form-input" placeholder="Email subject">
+                </div>
+
+                <div class="form-group form-group-grow">
+                    <label for="result-body">Body</label>
+                    <textarea id="result-body" class="form-textarea" placeholder="Email body content..."></textarea>
+                </div>
+
+                <!-- Action Buttons -->
+                <div class="button-group">
+                    <button id="btn-generate" class="btn-primary">Generate Link</button>
+                    <button id="btn-save-to-library" class="btn-success">Save to Library</button>
+                </div>
+
+                <!-- Output Section (Hidden by default) -->
+                <div id="output-wrapper" class="output-section hidden">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="save-template-name">Template Name</label>
+                            <input type="text" id="save-template-name" class="form-input" placeholder="New Template">
+                        </div>
+                        <div class="form-group">
+                            <label for="save-target-folder">Save To</label>
+                            <select id="save-target-folder" class="form-input"></select>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="result-mailto">MailTo Link</label>
+                        <div class="input-with-button">
+                            <input type="text" id="result-mailto" class="form-input" readonly>
+                            <button id="copy-mailto-btn" class="btn-secondary">Copy</button>
+                        </div>
+                    </div>
+
+                    <a href="#" id="result-link" target="_blank" class="btn-primary btn-block">Open in Email Client</a>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modal -->
+    <div id="modal-overlay" class="modal-overlay">
+        <div class="modal-content">
+            <div id="modal-body"></div>
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div id="toast" class="toast"></div>
+</body>
+</html>
