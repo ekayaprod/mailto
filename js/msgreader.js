@@ -1,15 +1,12 @@
 /**
- * js/msgreader.js
- * Version 2.0.22 (ES6 Module - Fix: Double Spacing & EML Encoding)
- * * CHANGE LOG:
- * - Updated _stripHtml to collapse multiple newlines into single/double newlines correctly.
- * - Updated _scanBufferForMimeText to detect and apply 'charset' from MIME headers
- * during Quoted-Printable decoding (fixes Schrödinger in .eml).
+ * OLE/MIME Email File Parser
+ * * processes .msg (OLE Compound Document) and .eml (MIME) file formats.
+ * Handles binary property extraction, text decoding, and recipient reconciliation.
  */
 
 'use strict';
 
-// --- MAPI Constants ---
+// MAPI Property Tags
 const PROP_TYPE_INTEGER32 = 0x0003;
 const PROP_TYPE_BOOLEAN = 0x000B;
 const PROP_TYPE_STRING = 0x001E;
@@ -33,7 +30,7 @@ const RECIPIENT_TYPE_TO = 1;
 const RECIPIENT_TYPE_CC = 2;
 const RECIPIENT_TYPE_BCC = 3;
 
-// --- Module-Level Caches ---
+// Module-Level Decoders
 let _textDecoderUtf16 = null;
 let _textDecoderWin1252 = null;
 let _domParser = null;
@@ -47,7 +44,6 @@ function getTextDecoder(encoding) {
         if (!_textDecoderWin1252) _textDecoderWin1252 = new TextDecoder('windows-1252', { fatal: false });
         return _textDecoderWin1252;
     }
-    // Dynamic encoding (e.g. iso-8859-1), don't cache or cache separately if needed
     return new TextDecoder(encoding, { fatal: false });
 }
 
@@ -58,37 +54,41 @@ function getDOMParser() {
     return _domParser;
 }
 
-// --- Helpers ---
+/* =============================================================================
+   TEXT PROCESSING UTILS
+   ============================================================================= */
 
+/**
+ * Decodes Quoted-Printable strings to raw text.
+ */
 function _decodeQuotedPrintable(str, charset = 'utf-8') {
     if (!str) return '';
     
-    // Basic QP decoding to bytes
+    // Join soft lines and convert hex to chars
     let decoded = str
-        .replace(/=(\r\n|\n)/g, '') // Join soft lines
+        .replace(/=(\r\n|\n)/g, '') 
         .replace(/=([0-9A-F]{2})/g, (match, hex) => String.fromCharCode(parseInt(hex, 16)));
     
     try {
-        // Convert the binary string to a Uint8Array
         let bytes = new Uint8Array(decoded.length);
         for (let i = 0; i < decoded.length; i++) bytes[i] = decoded.charCodeAt(i);
         
-        // Decode using the specified charset
-        // Normalize charset names
         let encoding = charset.toLowerCase();
-        if (encoding === 'us-ascii') encoding = 'utf-8'; // Compatible fallback
+        if (encoding === 'us-ascii') encoding = 'utf-8';
         
         return new TextDecoder(encoding, { fatal: false }).decode(bytes);
     } catch (e) { 
-        console.warn(`QP Decode Error for charset ${charset}:`, e);
         return decoded; 
     }
 }
 
+/**
+ * Removes HTML tags and CSS artifacts, normalizing to plain text.
+ */
 function _stripHtml(html) {
     if (!html || typeof html !== 'string') return ''; 
     
-    // Pass 1: Aggressive Regex Removal
+    // Aggressive Regex Removal for scripts/styles
     let text = html
         .replace(/<head[\s\S]*?<\/head>/gi, '')
         .replace(/<style[\s\S]*?<\/style>/gi, '')
@@ -96,14 +96,12 @@ function _stripHtml(html) {
         .replace(/<!--[\s\S]*?-->/g, '')
         .replace(/<\?xml[^>]*\?>/gi, '');
 
-    // Remove Outlook-specific raw CSS artifacts
+    // Outlook-specific CSS artifact removal
     text = text.replace(/[.#a-z0-9_]+\s*\{[^}]+\}/gi, '');
 
-    // FIX: Better whitespace handling for block tags
-    // Replace block tags with a placeholder, consume surrounding whitespace
+    // Block tag spacing
     text = text.replace(/\s*<(br|p|div|tr|li|h1|h2|h3|h4|h5|h6)[^>]*>\s*/gi, '\n');
     
-    // Pass 2: DOM Parsing
     let parser = getDOMParser();
     if (parser) {
         try {
@@ -121,13 +119,14 @@ function _stripHtml(html) {
     return _normalizeText(text);
 }
 
+/**
+ * Normalizes line endings and collapses excessive whitespace.
+ */
 function _normalizeText(text) {
     if (!text) return '';
-    // Normalize line endings and trim excessive whitespace
     return text
-        .replace(/\r\n/g, '\n') // Windows to Unix
-        .replace(/\r/g, '\n')   // Mac to Unix
-        // FIX: Collapse multiple newlines (3 or more) into 2 (Paragraph break)
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n')
         .replace(/\n{3,}/g, '\n\n') 
         .trim();
 }
@@ -185,6 +184,10 @@ function filetimeToDate(low, high) {
     } catch (e) { return null; }
 }
 
+/* =============================================================================
+   PARSER LOGIC
+   ============================================================================= */
+
 function _parsePropTag(entryName) {
     let propTagStr = "00000000";
     if (entryName.length >= 20) propTagStr = entryName.substring(entryName.length - 8);
@@ -201,8 +204,11 @@ function _parsePropTag(entryName) {
 function _shouldStoreProperty(propId, newPropType, existingProp) {
     let isBodyProperty = (propId === PROP_ID_BODY || propId === PROP_ID_HTML_BODY);
     if (!isBodyProperty || !existingProp) return true;
+    
+    // Prefer String types over other types for body
     let existingIsText = (existingProp.type === PROP_TYPE_STRING || existingProp.type === PROP_TYPE_STRING8);
     let newIsText = (newPropType === PROP_TYPE_STRING || newPropType === PROP_TYPE_STRING8);
+    
     if (existingIsText && !newIsText) return false;
     if (!existingIsText && newIsText) return true;
     return false;
@@ -222,7 +228,9 @@ function parseAddress(addr) {
     return { name, email };
 }
 
-// --- Internal Parser Class ---
+/**
+ * Main Parser Class
+ */
 function MsgReaderParser(arrayBuffer) {
     if (!(arrayBuffer instanceof ArrayBuffer) && !(arrayBuffer instanceof Uint8Array)) {
         throw new Error("MsgReader: Input must be ArrayBuffer or Uint8Array.");
@@ -245,7 +253,6 @@ MsgReaderParser.prototype.parse = function() {
 };
 
 MsgReaderParser.prototype.parseMime = function() {
-    console.log('Parsing as MIME/text file');
     this._mimeScanCache = null;
     let rawText = '';
     try { rawText = new TextDecoder('utf-8', { fatal: false }).decode(this.dataView); }
@@ -256,6 +263,7 @@ MsgReaderParser.prototype.parseMime = function() {
     
     let mimeData = this._scanBufferForMimeText(rawText);
     let recipients = [];
+    
     let parseMimeAddresses = (addrString, type) => {
         if (!addrString) return;
         addrString.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).forEach(addr => {
@@ -432,7 +440,6 @@ MsgReaderParser.prototype._scanBufferForMimeText = function(rawText) {
         catch (e) { 
             try { rawText = new TextDecoder('latin1').decode(this.dataView); }
             catch (e2) { 
-                console.warn('Could not decode raw buffer for MIME scan.');
                 return { subject: null, to: null, cc: null, body: null };
             }
         }
@@ -481,7 +488,7 @@ MsgReaderParser.prototype._scanBufferForMimeText = function(rawText) {
                  if (/Content-Transfer-Encoding:\s*quoted-printable/i.test(partHeaders)) {
                      encoding = 'quoted-printable';
                  }
-                 // FIX: Capture charset from part headers (e.g. iso-8859-1)
+                 
                  const charsetMatch = partHeaders.match(/charset=["']?([^"';\r\n]+)/i);
                  if (charsetMatch) charset = charsetMatch[1];
 
@@ -510,7 +517,6 @@ MsgReaderParser.prototype._scanBufferForMimeText = function(rawText) {
              if (charsetMatch) charset = charsetMatch[1];
         }
         
-        // FIX: Pass charset to decoder
         result.body = (encoding === 'quoted-printable') ? _decodeQuotedPrintable(bodyText, charset) : bodyText;
     }
     
@@ -682,22 +688,12 @@ MsgReaderParser.prototype.extractRecipients = function() {
         }
     });
     
-    console.log('METHOD 1: Extracted recipients from OLE storages:', recipients.length);
-    recipients.forEach((r, i) => console.log(`  [${i}] Type=${r.recipientType}, Email=${r.email}, Name=${r.name}`));
-    
     let displayTo = this.properties[PROP_ID_DISPLAY_TO] ? this.properties[PROP_ID_DISPLAY_TO].value : null;
     let displayCc = this.properties[PROP_ID_DISPLAY_CC] ? this.properties[PROP_ID_DISPLAY_CC].value : null;
-    
-    console.log('METHOD 3: Display Fields');
-    console.log('  DisplayTo:', displayTo);
-    console.log('  DisplayCc:', displayCc);
     
     if (displayTo || displayCc) {
         let displayToEmails = _extractAddresses(displayTo);
         let displayCcEmails = _extractAddresses(displayCc);
-        
-        console.log('  Parsed TO emails:', displayToEmails);
-        console.log('  Parsed CC emails:', displayCcEmails);
         
         let toEmailCounts = {};
         let ccEmailCounts = {};
@@ -710,27 +706,19 @@ MsgReaderParser.prototype.extractRecipients = function() {
             ccEmailCounts[email] = (ccEmailCounts[email] || 0) + 1;
         });
         
-        console.log('  TO counts:', toEmailCounts);
-        console.log('  CC counts:', ccEmailCounts);
-        
         recipients.forEach(recipient => {
             let emailKey = recipient.email.toLowerCase();
             
             if (ccEmailCounts[emailKey] && ccEmailCounts[emailKey] > 0) {
                 recipient.recipientType = RECIPIENT_TYPE_CC;
                 ccEmailCounts[emailKey]--;
-                console.log(`  Matched ${emailKey} to CC (remaining: ${ccEmailCounts[emailKey]})`);
             }
             else if (toEmailCounts[emailKey] && toEmailCounts[emailKey] > 0) {
                 recipient.recipientType = RECIPIENT_TYPE_TO;
                 toEmailCounts[emailKey]--;
-                console.log(`  Matched ${emailKey} to TO (remaining: ${toEmailCounts[emailKey]})`);
             }
         });
     }
-    
-    console.log('FINAL: Corrected recipient types');
-    recipients.forEach((r, i) => console.log(`  [${i}] Type=${r.recipientType}, Email=${r.email}`));
     
     this.properties['recipients'] = { id: 0, value: recipients };
 };
