@@ -21,17 +21,32 @@ const CONFIG = {
    ============================================================================= */
 
 const Utils = {
+    /**
+     * Sanitizes string input for HTML rendering.
+     * @param {string} str - Raw input string.
+     * @returns {string} HTML-safe string.
+     */
     escapeHTML: (str) => {
         const div = document.createElement('div');
         div.textContent = str ?? '';
         return div.innerHTML;
     },
 
+    /**
+     * Generates a pseudo-random identifier.
+     * @returns {string} UUID or timestamp-based string.
+     */
     generateId: () => {
         if (crypto?.randomUUID) return crypto.randomUUID();
         return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     },
 
+    /**
+     * Delays execution of a function until after a wait period.
+     * @param {Function} func - Target function.
+     * @param {number} delay - Wait time in ms.
+     * @returns {Function} Debounced function.
+     */
     debounce: (func, delay) => {
         let timeout;
         return (...args) => {
@@ -40,6 +55,11 @@ const Utils = {
         };
     },
 
+    /**
+     * Writes text to the system clipboard.
+     * @param {string} text - Text to copy.
+     * @returns {Promise<boolean>} Success status.
+     */
     copyToClipboard: async (text) => {
         try {
             await navigator.clipboard.writeText(text);
@@ -50,6 +70,12 @@ const Utils = {
         }
     },
 
+    /**
+     * Triggers a browser download for the provided content.
+     * @param {string} content - File content.
+     * @param {string} filename - Output filename.
+     * @param {string} mimeType - MIME type (e.g., 'text/csv').
+     */
     downloadFile: (content, filename, mimeType) => {
         const blob = new Blob([content], { type: mimeType });
         const url = URL.createObjectURL(blob);
@@ -62,6 +88,11 @@ const Utils = {
         URL.revokeObjectURL(url);
     },
 
+    /**
+     * Opens the system file picker dialog.
+     * @param {Function} callback - Handler for the selected file.
+     * @param {string} accept - File type filter.
+     */
     openFilePicker: (callback, accept = '*') => {
         const input = document.createElement('input');
         input.type = 'file';
@@ -72,6 +103,11 @@ const Utils = {
         input.click();
     },
 
+    /**
+     * Wrapper for FileReader API.
+     * @param {File} file - File object to read.
+     * @returns {Promise<string>} File content.
+     */
     readTextFile: (file) => {
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
@@ -81,6 +117,11 @@ const Utils = {
         });
     },
 
+    /**
+     * Parses a single CSV line, handling quoted fields and commas.
+     * @param {string} line - Raw CSV line.
+     * @returns {string[]} Array of field values.
+     */
     parseCSVLine: (line) => {
         const values = [];
         let currentVal = '';
@@ -111,6 +152,12 @@ const Utils = {
         return values;
     },
 
+    /**
+     * Serializes an array of objects to a CSV string.
+     * @param {Object[]} data - Data array.
+     * @param {string[]} headers - Column headers.
+     * @returns {string} CSV string.
+     */
     toCSV: (data, headers) => {
         const escapeCell = (cell) => {
             const str = String(cell ?? '');
@@ -126,6 +173,12 @@ const Utils = {
         return [headers.join(','), ...rows].join('\n');
     },
 
+    /**
+     * Parses CSV content into an object array.
+     * @param {string} text - Raw CSV content.
+     * @param {string[]} requiredHeaders - List of mandatory headers for validation.
+     * @returns {Object} Result containing 'data' array and 'errors' array.
+     */
     parseCSV: (text, requiredHeaders) => {
         const lines = text.split('\n').filter(l => l.trim());
         if (lines.length === 0) return { data: [], errors: [] };
@@ -160,6 +213,12 @@ const Utils = {
    ============================================================================= */
 
 const UI = {
+    /**
+     * Injects a modal into the DOM.
+     * @param {string} title - Modal header.
+     * @param {string} content - HTML content for body.
+     * @param {Object[]} buttons - Array of button configs { label, class, callback }.
+     */
     showModal: (title, content, buttons = []) => {
         const overlay = document.getElementById('modal-overlay');
         const body = document.getElementById('modal-body');
@@ -193,6 +252,9 @@ const UI = {
         document.getElementById('modal-overlay').classList.remove('show');
     },
 
+    /**
+     * Displays a transient toast notification.
+     */
     showToast: (() => {
         let timeout;
         return (message) => {
@@ -204,6 +266,13 @@ const UI = {
         };
     })(),
 
+    /**
+     * Generic list renderer.
+     * @param {HTMLElement} container - DOM target.
+     * @param {Array} items - Data items.
+     * @param {string} emptyMessage - Text to show if items is empty.
+     * @param {Function} createItemFn - Factory function returning an HTMLElement.
+     */
     renderList: (container, items, emptyMessage, createItemFn) => {
         container.innerHTML = '';
         
@@ -533,10 +602,7 @@ const App = {
     },
 
     openSaveModal: () => {
-        // Get current folder context or root
         const folders = State.getAllFolders();
-        // If we are editing a known item, prepopulate its name? 
-        // For now, just use subject or default
         const defaultName = App.elements.resultSubject.value.trim() || 'Untitled Template';
         
         const folderOptions = folders.map(f => 
@@ -550,14 +616,48 @@ const App = {
             </div>
             <div class="form-group">
                 <label for="modal-save-folder">Location</label>
-                <select id="modal-save-folder" class="form-input">
-                    ${folderOptions}
-                </select>
+                <div style="display:flex; gap:0.5rem;">
+                    <select id="modal-save-folder" class="form-input" style="flex-grow:1;">
+                        ${folderOptions}
+                    </select>
+                    <button id="btn-modal-new-folder" class="btn-secondary" title="New Folder" style="width:auto; padding:0 0.8rem;">+</button>
+                </div>
             </div>
         `, [
             { label: 'Cancel' },
             { label: 'Save', class: 'btn-primary', callback: () => App.performSave() }
         ]);
+
+        // Handle create new folder from within save modal
+        document.getElementById('btn-modal-new-folder').onclick = () => {
+            const folderName = prompt("Enter name for new folder:");
+            if (folderName && folderName.trim()) {
+                // Create inside the currently selected folder in the dropdown
+                const parentId = document.getElementById('modal-save-folder').value;
+                const parentRes = State.findItem(parentId);
+                const parentFolder = parentRes?.item || parentRes || { children: State.data.library };
+                
+                if (!parentFolder.children) parentFolder.children = [];
+                const newFolderId = Utils.generateId();
+                parentFolder.children.push({
+                    id: newFolderId,
+                    type: 'folder',
+                    name: folderName.trim(),
+                    children: []
+                });
+                State.save();
+                
+                // Refresh modal state
+                const currentName = document.getElementById('modal-save-name').value;
+                App.openSaveModal(); // Re-render
+                
+                // Restore state
+                setTimeout(() => {
+                    document.getElementById('modal-save-name').value = currentName;
+                    document.getElementById('modal-save-folder').value = newFolderId; 
+                }, 0);
+            }
+        };
     },
 
     performSave: () => {
@@ -578,20 +678,27 @@ const App = {
         // Check for overwrite
         const existingIndex = targetFolder.children.findIndex(c => c.type === 'template' && c.name === name);
         
+        // Ensure we are saving the LATEST content from the form
+        const data = {
+            to: App.elements.resultTo.value,
+            cc: App.elements.resultCc.value,
+            bcc: App.elements.resultBcc.value,
+            subject: App.elements.resultSubject.value,
+            body: App.elements.resultBody.value
+        };
+        const freshMailto = MailTo.build(data);
+        App.elements.resultMailto.value = freshMailto;
+        App.elements.resultLink.href = freshMailto;
+        
         if (existingIndex >= 0) {
-            // Confirm overwrite via a 2nd modal or logic? 
-            // Since UI.showModal replaces content, we can just overwrite silently 
-            // OR ask. For simplicity/speed: Overwrite silently (filesystem style usually asks, but web apps often just save)
-            // Let's update the existing item
-            targetFolder.children[existingIndex].mailto = App.elements.resultMailto.value;
+            targetFolder.children[existingIndex].mailto = freshMailto;
             UI.showToast(`Updated "${name}"`);
         } else {
-            // New Item
             targetFolder.children.push({
                 id: Utils.generateId(),
                 type: 'template',
                 name: name,
-                mailto: App.elements.resultMailto.value
+                mailto: freshMailto
             });
             UI.showToast('Saved new template');
         }
@@ -692,7 +799,7 @@ const App = {
                 <div class="item-name" title="${Utils.escapeHTML(item.name)}">${Utils.escapeHTML(item.name)}</div>
                 <div class="item-actions">
                     <button class="action-btn move-btn" title="Move">${Icons.move}</button>
-                    ${!isFolder ? `<button class="action-btn edit-btn" title="Load into Editor">${Icons.edit}</button>` : `<button class="action-btn edit-btn" title="Rename">${Icons.edit}</button>`}
+                    ${!isFolder ? '' : `<button class="action-btn edit-btn" title="Rename">${Icons.edit}</button>`}
                     <button class="action-btn delete-btn" title="Delete">${Icons.trash}</button>
                 </div>
             `;
@@ -739,19 +846,6 @@ const App = {
                         if (val) { item.name = val; State.save(); App.renderLibrary(); }
                     }}
                 ]);
-            } else {
-                // Load Template Logic (Clicking Edit icon on template)
-                const parsed = MailTo.parse(item.mailto);
-                App.elements.resultTo.value = parsed.to || '';
-                App.elements.resultCc.value = parsed.cc || '';
-                App.elements.resultBcc.value = parsed.bcc || '';
-                App.elements.resultSubject.value = parsed.subject || '';
-                App.elements.resultBody.value = parsed.body || '';
-                
-                // Track which item we are editing (optional if we want "Save" to strictly overwrite vs "Save As")
-                State.currentEditingId = item.id; 
-                App.updatePreview();
-                UI.showToast('Template loaded');
             }
         } else if (e.target.closest('.move-btn')) {
             const folders = State.getAllFolders();
