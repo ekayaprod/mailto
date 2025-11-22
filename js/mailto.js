@@ -853,7 +853,7 @@ const App = {
                 <div class="form-group">
                     <label>Destination:</label>
                     <select id="move-select" class="form-input">
-                        ${folders.map(f => `<option value="${f.id}" ${f.id === State.currentFolderId ? 'selected' : ''}>${'&nbsp;'.repeat(f.level * 2)}${f.name}</option>`).join('')}
+                        ${folders.map(f => `<option value="${f.id}" ${f.id === State.currentFolderId ? 'selected' : ''}>${'&nbsp;'.repeat(f.level * 2)}${Utils.escapeHTML(f.name)}</option>`).join('')}
                     </select>
                 </div>
             `, [

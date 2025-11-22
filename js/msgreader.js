@@ -458,10 +458,15 @@ MsgReaderParser.prototype._scanBufferForMimeText = function(rawText) {
     result.cc = findField('Cc');
     
     let headerEndIndex = rawText.indexOf('\r\n\r\n');
-    if (headerEndIndex === -1) headerEndIndex = rawText.indexOf('\n\n');
+    let headerOffset = 4;
+
+    if (headerEndIndex === -1) {
+        headerEndIndex = rawText.indexOf('\n\n');
+        headerOffset = 2;
+    }
     
     if (headerEndIndex !== -1) {
-        let bodyText = rawText.substring(headerEndIndex + 4);
+        let bodyText = rawText.substring(headerEndIndex + headerOffset);
         let encoding = null;
         let charset = 'utf-8'; // Default
 
