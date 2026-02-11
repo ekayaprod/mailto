@@ -634,6 +634,13 @@ function _extractAddresses(displayString) {
     return emails;
 }
 
+/**
+ * Extracts recipients from the OLE structure.
+ * Iterates through directory entries to find recipient objects,
+ * parses their properties (Type, Name, Email), and reconciles them
+ * with the display strings (DisplayTo, DisplayCc) to determine accurate
+ * recipient types (To vs CC).
+ */
 MsgReaderParser.prototype.extractRecipients = function() {
     let self = this;
     let recipients = [];
