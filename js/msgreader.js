@@ -736,6 +736,21 @@ MsgReaderParser.prototype.getFieldValue = function(name) {
 
 // --- Exported Object ---
 const MsgReader = {
+    /**
+     * Parses .msg (OLE Compound Document) and .eml (MIME) email files.
+     * @param {ArrayBuffer} arrayBuffer - The raw file content to parse.
+     * @returns {{
+     *   subject: string|null,
+     *   body: string|null,
+     *   bodyHTML: string|null,
+     *   recipients: Array<{
+     *     name: string,
+     *     email: string|null,
+     *     recipientType: number
+     *   }>,
+     *   getFieldValue: (name: string) => any
+     * }} The parsed email object.
+     */
     read: function(arrayBuffer) {
         let reader = new MsgReaderParser(arrayBuffer);
         if (reader.dataView.byteLength < 8) return reader.parseMime();
