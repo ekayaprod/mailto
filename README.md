@@ -1,50 +1,22 @@
 # ⚡ MailTo Link Generator
 
-[![status: active](https://img.shields.io/badge/status-active-brightgreen)](#)
-[![execution: client-side](https://img.shields.io/badge/execution-client--side-blue)](#)
+**1. Project Title & Brief Description**
+The MailTo Link Generator is a zero-dependency, pure client-side web application I developed as a personal utility to instantly extract, generate, and organize `mailto` hyperlinks directly within my browser.
 
-A zero-dependency, pure client-side engine for extracting, generating, and organizing `mailto` hyperlinks. No backend. Strict browser execution.
+**2. The Operational Bottleneck**
+I built this tool to eliminate the heavy manual processing and data entry risks associated with copying complex, fossilized Outlook templates (`.msg`, `.eml`, `.oft`) into web-native formats. Manually transcoding recipients, subject lines, and body text was a constant friction point in my workflow that often resulted in broken spacing, malformed URLs, and lost routing context.
 
-## 🏗️ Architecture
+**3. Tech Stack & Architecture**
+- **Languages:** JavaScript (ES6 Modules), HTML5, CSS3
+- **Execution:** 100% client-side logic (No backend server or dependencies)
+- **State Management:** Browser `localStorage` (via the `mailto_generator_data` key)
+- **Key Components:** Custom parser library (`msgreader.js`) for reading OLE/email file formats, and an application controller (`mailto.js`).
 
-The active codebase is completely encapsulated within the `mailto-link-generator/` directory to support monorepo integration. There is no `package.json` or build system. The application functions entirely as a static site.
+**4. Key Features & Workflow**
+- **Raw File Parsing:** I can simply drag and drop `.msg`, `.eml`, or `.oft` files into the UI to automatically extract metadata (To, CC, BCC, Subject, Body) without manual copy-pasting.
+- **Template Library:** I categorize my frequently used templates into folders, building a resilient personal asset library that can be backed up or restored via CSV.
+- **Deterministic Link Generation:** The tool automatically generates perfectly URL-encoded HTML `mailto` links every time, neutralizing special characters.
+- **Local Execution:** Bootstrapped via a simple local HTTP server (e.g., `python3 -m http.server 8000`) to bypass browser CORS policies for ES6 modules.
 
-- **State Persistence:** Data is persisted purely via the browser's `localStorage` using the `mailto_generator_data` key.
-- **Execution Paradigm:** 100% client-side logic.
-- **Application Topology:**
-
-  | Route/File                              | Domain     | Structural Purpose                                                                                                     |
-  | :-------------------------------------- | :--------- | :--------------------------------------------------------------------------------------------------------------------- |
-  | `mailto-link-generator/index.html`      | Entry      | The core application entry point orchestrating the UI.                                                                 |
-  | `mailto-link-generator/js/mailto.js`    | Controller | The application controller managing logic, state, and user interactions.                                               |
-  | `mailto-link-generator/js/msgreader.js` | Library    | A standalone parser library that extracts metadata (To, CC, BCC, Subject, Body) from `.eml`, `.msg`, and `.oft` files. |
-
-## 🚀 Usage
-
-Since the codebase relies entirely on static assets, there are no package managers or installation commands to run. However, due to strict browser security policies (CORS) surrounding ES6 Modules (`<script type="module">`), the file import feature requires a local HTTP server to function correctly.
-
-1. Navigate into the encapsulated directory:
-   ```bash
-   cd mailto-link-generator
-   ```
-2. Boot up a local server. For example:
-   ```bash
-   python3 -m http.server 8000
-   ```
-   _or_
-   ```bash
-   npx serve .
-   ```
-3. Open `http://localhost:8000` in a modern web browser to execute. Do not open `index.html` directly from the file system.
-
-## ⚙️ Capabilities
-
-- **Raw Extraction:** Instantly parse `.msg`, `.eml`, and `.oft` files by dragging them into the upload zone.
-  - _Benefit:_ Eliminates manual copy-pasting of complex email structures.
-  - _Use Case:_ Rapidly convert fossilized Outlook templates into web-native formats without losing recipient routing or subject line context.
-- **Library System:** Categorize templates into folders and manage state via CSV import and export.
-  - _Benefit:_ Transforms ephemeral mailto links into a resilient, version-controlled asset library safely stored in local persistence.
-  - _Use Case:_ Organize campaign-specific outreach, manage departmental contact lists, and seamlessly transfer workspace data across environments.
-- **Deterministic Output:** Generates perfectly URL-encoded HTML links every time.
-  - _Benefit:_ Guarantees cross-client rendering integrity by neutralizing special characters and broken spacing.
-  - _Use Case:_ Deploy bulletproof mailto links in enterprise portals or static sites where malformed URLs would result in dead communication channels.
+**5. Localized Impact**
+This utility significantly optimizes my daily workflow by completely eliminating human error and manual transcription when constructing complex communication links. It drastically reduces the time I spend formatting outreach templates, ensuring that my personal repository of communication assets always produces bulletproof, cross-client compatible links.
