@@ -7,3 +7,4 @@
 ## Recent Updates
 - Created `ROADMAP.md` to track project progress.
 - Documented `extractRecipients` in `js/msgreader.js` to explain the reconciliation logic between directory entries and display strings.
+- Published a missing 'Quick Start' setup matrix to `README.md` and injected an 'Architectural Map' to detail the `mailto-link-generator/` directory layout.

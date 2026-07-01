@@ -10,5 +10,8 @@
 ## In Progress
 - [ ] Documentation improvements (JSDoc for complex parsers).
 
+## Recently Addressed
+- [x] Documentation improvements (Added missing Quick Start and Architectural Map to root README).
+
 ## Planned
 - [ ] Unit tests for `MsgReader`.
