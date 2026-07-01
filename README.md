@@ -1,7 +1,28 @@
 # ⚡ MailTo Link Generator
 
+## 🚀 Quick Start
+Welcome aboard! To boot the application locally:
+1. `cd mailto-link-generator` (Navigate to the core utility directory).
+2. `python3 -m http.server 8000` (Or use any local web server to serve the static files, avoiding CORS issues with ES6 modules).
+3. Open `http://localhost:8000` in your browser.
+
+## 🗺️ Architectural Map
+| Directory/File | Purpose |
+|----------------|---------|
+| `index.html`   | The UI entry point and core view structure. |
+| `css/`         | Styling logic for the user interface. |
+| `js/mailto.js` | The application controller managing DOM, state, and serialization. |
+| `js/msgreader.js`| The standalone OLE/MIME parser library parsing `.eml`, `.msg`, and `.oft` binaries. |
+
 ## 1. Overview
 The **MailTo Link Generator** is a zero-dependency, pure client-side web utility engineered specifically to streamline my personal communication workflows. Built as an encapsulated local application, it instantly extracts metadata from complex email files (`.msg`, `.eml`, `.oft`) and generates perfectly encoded, cross-client compatible `mailto:` hyperlinks. It operates entirely within the browser, requiring no backend or external server dependencies.
+
+## ✨ Core Features & Workflow Improvements
+* **Drag-and-Drop File Extraction (`.msg`, `.eml`, `.oft`)**: Seamlessly drop fossilized email formats directly into the browser. The tool autonomously extracts metadata (Subject, Body, complex To/CC/BCC arrays) via pure client-side OLE/MIME parsing, eliminating tedious manual copy-pasting and manual URL encoding.
+* **Hierarchical Template Library**: Save generated `mailto:` links into a custom, nested folder structure. This searchable, localized asset library accelerates daily communication output and workflow consistency.
+* **Persistent Local Data**: All templates and structures are securely stored in the browser's `localStorage` (`mailto_generator_data`). The application is resilient and instant, acting as a personal, offline communication database.
+* **CSV Export & Import**: Ensure data portability and version control. Safely backup the entire template library or import shared asset lists, streamlining the creation of massive email campaigns or standard operating procedures.
+* **Zero-Touch Client-Side Execution**: Functions as an encapsulated static application. Zero backend dependencies mean zero server lag, zero deployment friction, and absolute data privacy since no files ever leave the local machine.
 
 ## 2. The Operational Catalyst
 In my daily workflow, I routinely deal with fossilized Outlook templates and complex email structures that require manual extraction and conversion into web-native communication channels. The process of opening an `.msg` or `.eml` file, copying the subject line, body text, and complex recipient arrays (To, CC, BCC), and then manually URL-encoding them to create a functional `mailto:` link was a tedious, error-prone manual nightmare. This repetitive technical friction caused significant bottlenecks and increased the risk of data entry errors. I needed an autonomous, zero-touch solution to bypass this manual copy-pasting and rapidly convert these files into robust hyperlinks, strictly for my own localized use.
